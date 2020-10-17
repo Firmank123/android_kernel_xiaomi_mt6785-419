@@ -1205,7 +1205,6 @@ SYSCALL_DEFINE5(process_madvise, int, pidfd, const struct iovec __user *, vec,
 	struct task_struct *task;
 	struct mm_struct *mm;
 	size_t total_len;
-	unsigned int f_flags;
 
 	if (flags != 0) {
 		ret = -EINVAL;
@@ -1216,7 +1215,7 @@ SYSCALL_DEFINE5(process_madvise, int, pidfd, const struct iovec __user *, vec,
 	if (ret < 0)
 		goto out;
 
-	pid = pidfd_get_pid(pidfd, &f_flags);
+	pid = pidfd_get_pid(pidfd);
 	if (IS_ERR(pid)) {
 		ret = PTR_ERR(pid);
 		goto free_iov;
