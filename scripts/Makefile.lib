@@ -235,7 +235,7 @@ cmd_cat = (cat $(filter-out FORCE,$^) > $@) || (rm -f $@; false)
 # ---------------------------------------------------------------------------
 
 quiet_cmd_ld = LD      $@
-cmd_ld = $(LD) $(ld_flags) $(filter-out FORCE,$^) -o $@
+cmd_ld = $(LDFINAL) $(ld_flags) $(filter-out FORCE,$^) -o $@
 
 # Objcopy
 # ---------------------------------------------------------------------------
