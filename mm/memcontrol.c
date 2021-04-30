@@ -2125,35 +2125,47 @@ static int memcg_hotplug_cpu_dead(unsigned int cpu)
 	drain_stock(stock);
 
 	for_each_mem_cgroup(memcg) {
+		struct mem_cgroup_stat_cpu *stat_cpu;
 		int i;
+
+		stat_cpu = per_cpu_ptr(memcg->stat_cpu, cpu);
 
 		for (i = 0; i < MEMCG_NR_STAT; i++) {
 			int nid;
 			long x;
 
-			x = this_cpu_xchg(memcg->stat_cpu->count[i], 0);
-			if (x)
+			x = stat_cpu->count[i];
+			if (x) {
+				stat_cpu->count[i] = 0;
 				atomic_long_add(x, &memcg->stat[i]);
+			}
 
 			if (i >= NR_VM_NODE_STAT_ITEMS)
 				continue;
 
 			for_each_node(nid) {
 				struct mem_cgroup_per_node *pn;
+				struct lruvec_stat *lstat_cpu;
 
 				pn = mem_cgroup_nodeinfo(memcg, nid);
-				x = this_cpu_xchg(pn->lruvec_stat_cpu->count[i], 0);
-				if (x)
+				lstat_cpu = per_cpu_ptr(pn->lruvec_stat_cpu, cpu);
+
+				x = lstat_cpu->count[i];
+				if (x) {
+					lstat_cpu->count[i] = 0;
 					atomic_long_add(x, &pn->lruvec_stat[i]);
+				}
 			}
 		}
 
 		for (i = 0; i < NR_VM_EVENT_ITEMS; i++) {
-			long x;
+			unsigned long x;
 
-			x = this_cpu_xchg(memcg->stat_cpu->events[i], 0);
-			if (x)
+			x = stat_cpu->events[i];
+			if (x) {
+				stat_cpu->events[i] = 0;
 				atomic_long_add(x, &memcg->events[i]);
+			}
 		}
 	}
 
