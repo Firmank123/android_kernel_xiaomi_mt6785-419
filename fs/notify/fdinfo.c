@@ -23,16 +23,14 @@
 #if defined(CONFIG_PROC_FS)
 
 #if defined(CONFIG_INOTIFY_USER) || defined(CONFIG_FANOTIFY)
-<<<<<<< HEAD
 
-=======
 #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 static void show_fdinfo(struct seq_file *m, struct file *f,
 			void (*show)(struct seq_file *m,
 				     struct fsnotify_mark *mark,
 					 struct file *file))
 #else
->>>>>>> 250120cfccc8 (import: susfs 1.5.9)
+
 static void show_fdinfo(struct seq_file *m, struct file *f,
 			void (*show)(struct seq_file *m,
 				     struct fsnotify_mark *mark))
