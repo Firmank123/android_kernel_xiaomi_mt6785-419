@@ -1050,8 +1050,6 @@ struct vfsmount *vfs_create_mount(struct fs_context *fc)
 	struct mnt_namespace *mnt_ns;
 	int mnt_id;
 #endif
-	if (!type)
-		return ERR_PTR(-ENODEV);
 #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 	// For newly created mounts, the only caller process we care is KSU
 	if (unlikely(susfs_is_current_ksu_domain())) {
@@ -1061,7 +1059,6 @@ struct vfsmount *vfs_create_mount(struct fs_context *fc)
 	mnt = alloc_vfsmnt(name, false, 0);
 bypass_orig_flow:
 #else
-	mnt = alloc_vfsmnt(name);
 #endif
 	if (!mnt)
 		return ERR_PTR(-ENOMEM);
