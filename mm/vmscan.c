@@ -4444,11 +4444,23 @@ static long get_nr_to_scan(struct lruvec *lruvec, struct scan_control *sc, bool 
 	struct mem_cgroup *memcg = lruvec_memcg(lruvec);
 	DEFINE_MAX_SEQ(lruvec);
 	DEFINE_MIN_SEQ(lruvec);
+	unsigned long psi_flags = 0;
+	bool in_memstall = false;
 
 	nr_to_scan = get_nr_evictable(lruvec, max_seq, min_seq, can_swap, need_aging);
 	if (!nr_to_scan)
 		return 0;
 
+	/*
+	 * MGLRU-PSI integration: Track when we need aging.
+	 * Aging needed indicates approaching memory pressure.
+	 * Signal PSI earlier than direct reclaim / swap exhaustion.
+	 */
+	if (*need_aging) {
+		psi_memstall_enter(&psi_flags);
+		in_memstall = true;
+		count_vm_event(PGSCAN_DIRECT_THROTTLE);
+	}
 
 	if (!mem_cgroup_online(memcg))
 		priority = 0;
@@ -4459,23 +4471,32 @@ static long get_nr_to_scan(struct lruvec *lruvec, struct scan_control *sc, bool 
 
 	nr_to_scan >>= priority;
 	if (!nr_to_scan)
-		return 0;
+		goto out;
 
 	if (!*need_aging)
-		return nr_to_scan;
+		goto out;
 
 	/* skip the aging path at the default priority */
 	if (priority == DEF_PRIORITY)
-		return nr_to_scan;
+		goto out;
 
 	/* leave the work to lru_gen_age_node() */
-	if (current_is_kswapd())
-		return 0;
+	if (current_is_kswapd()) {
+		nr_to_scan = 0;
+		goto out;
+	}
 
 	if (try_to_inc_max_seq(lruvec, max_seq, sc, can_swap, false))
-		return nr_to_scan;
+		goto out;
 
-	return min_seq[!can_swap] + MIN_NR_GENS <= max_seq ? nr_to_scan : 0;
+	nr_to_scan = min_seq[!can_swap] + MIN_NR_GENS <= max_seq ? nr_to_scan : 0;
+
+out:
+	/* Leave PSI memstall state before returning */
+	if (in_memstall)
+		psi_memstall_leave(&psi_flags);
+
+	return nr_to_scan;
 }
 
 static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc)
@@ -4486,6 +4507,9 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 	bool swapped = false;
 	unsigned long reclaimed = sc->nr_reclaimed;
 	struct pglist_data *pgdat = lruvec_pgdat(lruvec);
+	unsigned long psi_flags = 0;
+	bool in_memstall = false;
+	int stall_cycles = 0;
 
 	blk_start_plug(&plug);
 
@@ -4508,7 +4532,30 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 		if (!nr_to_scan)
 			goto done;
 
+		/*
+		 * MGLRU-PSI integration: Track unproductive reclaim cycles.
+		 * Signal PSI after 2 consecutive failures to make progress.
+		 */
+
 		delta = evict_pages(lruvec, sc, swappiness, &swapped);
+
+		/* Track reclaim effectiveness for PSI */
+		if (delta == 0 || need_aging) {
+			stall_cycles++;
+			if (stall_cycles >= 2 && !in_memstall) {
+				psi_memstall_enter(&psi_flags);
+				in_memstall = true;
+				count_vm_event(PGSCAN_DIRECT_THROTTLE);
+			}
+		} else {
+			/* Making progress - reset stall tracking */
+			stall_cycles = 0;
+			if (in_memstall) {
+				psi_memstall_leave(&psi_flags);
+				in_memstall = false;
+			}
+		}
+
 		if (!delta)
 			goto done;
 
@@ -4529,6 +4576,10 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 done:
 	if (current_is_kswapd())
 		current->reclaim_state->mm_walk = NULL;
+
+	/* Clean up PSI state on function exit */
+	if (in_memstall)
+		psi_memstall_leave(&psi_flags);
 
 	blk_finish_plug(&plug);
 }
