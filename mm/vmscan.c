@@ -2560,8 +2560,10 @@ module_param_named(scan_anon_prio, scan_anon_priority, int, 0644);
 
 /*
  * MGLRU-PSI integration tunables
+ * Higher threshold = less aggressive LMKD
+ * Default 4: balanced for 6GB RAM devices
  */
-int sysctl_mglru_psi_threshold __read_mostly = 2;
+int sysctl_mglru_psi_threshold __read_mostly = 4;
 int sysctl_mglru_psi_enabled __read_mostly = 1;
 
 static inline bool mglru_psi_enabled(void)
@@ -4455,23 +4457,15 @@ static long get_nr_to_scan(struct lruvec *lruvec, struct scan_control *sc, bool 
 	struct mem_cgroup *memcg = lruvec_memcg(lruvec);
 	DEFINE_MAX_SEQ(lruvec);
 	DEFINE_MIN_SEQ(lruvec);
-	unsigned long psi_flags = 0;
-	bool in_memstall = false;
 
 	nr_to_scan = get_nr_evictable(lruvec, max_seq, min_seq, can_swap, need_aging);
 	if (!nr_to_scan)
 		return 0;
 
 	/*
-	 * MGLRU-PSI integration: Track when we need aging.
-	 * Aging needed indicates approaching memory pressure.
-	 * Signal PSI earlier than direct reclaim / swap exhaustion.
+	 * Skip early PSI signaling here - it's too aggressive.
+	 * We'll signal PSI only in shrink loop when really needed.
 	 */
-	if (*need_aging && mglru_psi_enabled()) {
-		psi_memstall_enter(&psi_flags);
-		in_memstall = true;
-		count_vm_event(PGSCAN_DIRECT_THROTTLE);
-	}
 
 	if (!mem_cgroup_online(memcg))
 		priority = 0;
@@ -4503,10 +4497,6 @@ static long get_nr_to_scan(struct lruvec *lruvec, struct scan_control *sc, bool 
 	nr_to_scan = min_seq[!can_swap] + MIN_NR_GENS <= max_seq ? nr_to_scan : 0;
 
 out:
-	/* Leave PSI memstall state before returning */
-	if (in_memstall)
-		psi_memstall_leave(&psi_flags);
-
 	return nr_to_scan;
 }
 
@@ -4550,8 +4540,16 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 
 		delta = evict_pages(lruvec, sc, swappiness, &swapped);
 
-		/* Track reclaim effectiveness for PSI */
-		if ((delta == 0 || need_aging) && mglru_psi_enabled()) {
+		/*
+		 * Track reclaim effectiveness for PSI
+		 * Only signal PSI when:
+		 * 1. Having trouble reclaiming (delta==0 or need_aging)
+		 * 2. Not kswapd (direct reclaim pressure)
+		 * 3. Priority is high (sc->priority < DEF_PRIORITY - 2)
+		 *    This means we've tried easier reclaim first
+		 */
+		if ((delta == 0 || need_aging) && mglru_psi_enabled() && 
+		    !current_is_kswapd() && sc->priority < DEF_PRIORITY - 2) {
 			stall_cycles++;
 			if (stall_cycles >= sysctl_mglru_psi_threshold && !in_memstall) {
 				psi_memstall_enter(&psi_flags);
