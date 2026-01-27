@@ -104,6 +104,7 @@
 #ifdef CONFIG_LRU_GEN
 extern int sysctl_mglru_psi_threshold;
 extern int sysctl_mglru_psi_enabled;
+extern int sysctl_mglru_low_swap_opt;
 #endif
 /* External variables not in a header file. */
 extern int suid_dumpable;
@@ -1615,6 +1616,15 @@ static struct ctl_table vm_table[] = {
 	{
 		.procname	= "mglru_psi_enabled",
 		.data		= &sysctl_mglru_psi_enabled,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &zero,
+		.extra2		= &one,
+	},
+	{
+		.procname	= "mglru_low_swap_opt",
+		.data		= &sysctl_mglru_low_swap_opt,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_minmax,
