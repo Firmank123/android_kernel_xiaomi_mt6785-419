@@ -2561,9 +2561,9 @@ module_param_named(scan_anon_prio, scan_anon_priority, int, 0644);
 /*
  * MGLRU-PSI integration tunables
  * Higher threshold = less aggressive LMKD
- * Default 4: balanced for 6GB RAM devices
+ * Default 6: balanced for multitasking, prevents app reloads at ~700MB free RAM
  */
-int sysctl_mglru_psi_threshold __read_mostly = 4;
+int sysctl_mglru_psi_threshold __read_mostly = 6;
 int sysctl_mglru_psi_enabled __read_mostly = 1;
 
 /*
@@ -4639,11 +4639,14 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 		 * Only signal PSI when:
 		 * 1. Having trouble reclaiming (delta==0 or need_aging)
 		 * 2. Not kswapd (direct reclaim pressure)
-		 * 3. Priority is high (sc->priority < DEF_PRIORITY - 2)
-		 *    This means we've tried easier reclaim first
+		 * 3. Priority is very high (sc->priority < DEF_PRIORITY - 3)
+		 *    This means we've tried easier reclaim first multiple times
+		 * 4. Free memory is critically low (<350MB equivalent = ~87,500 pages)
+		 *    Prevents LMKD from killing apps during normal multitasking at ~700MB
 		 */
 		if ((delta == 0 || need_aging) && mglru_psi_enabled() && 
-		    !current_is_kswapd() && sc->priority < DEF_PRIORITY - 2) {
+		    !current_is_kswapd() && sc->priority < DEF_PRIORITY - 3 &&
+		    global_node_page_state(NR_FREE_PAGES) < (87500)) {
 			stall_cycles++;
 			if (stall_cycles >= sysctl_mglru_psi_threshold && !in_memstall) {
 				psi_memstall_enter(&psi_flags);
