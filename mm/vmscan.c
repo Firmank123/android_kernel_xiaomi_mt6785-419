@@ -2574,6 +2574,15 @@ int sysctl_mglru_psi_enabled __read_mostly = 1;
  */
 int sysctl_mglru_low_swap_opt __read_mostly = 1;
 
+/*
+ * Smooth transition optimization
+ * Max pages to swap per reclaim cycle to prevent CPU hogging
+ * Lower = smoother but slower reclaim
+ * Higher = faster but more stutter
+ * Default: 128 pages (~512KB per cycle)
+ */
+int sysctl_mglru_max_swap_batch __read_mostly = 128;
+
 static inline bool mglru_psi_enabled(void)
 {
 	return sysctl_mglru_psi_enabled && !static_branch_unlikely(&psi_disabled);
@@ -4548,6 +4557,7 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 	unsigned long psi_flags = 0;
 	bool in_memstall = false;
 	int stall_cycles = 0;
+	int swap_pages_this_cycle = 0;
 
 	blk_start_plug(&plug);
 
@@ -4565,6 +4575,23 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 			swappiness = 1;
 		else
 			swappiness = 0;
+
+		/*
+		 * Smooth transition: Limit swap operations per cycle.
+		 * Prevents CPU from being monopolized by compression during
+		 * sudden memory pressure (e.g., launching heavy apps like VMs).
+		 *
+		 * This spreads compression load over multiple cycles,
+		 * allowing UI/rendering to remain responsive.
+		 */
+		if (swappiness > 0 && swap_pages_this_cycle >= sysctl_mglru_max_swap_batch) {
+			/*
+			 * Already swapped enough this cycle.
+			 * Reduce swappiness to prefer file reclaim.
+			 * This prevents long compression pauses.
+			 */
+			swappiness = min(swappiness / 4, 25);
+		}
 
 		/*
 		 * Gaming optimization: If we've already swapped a lot in this cycle
@@ -4589,6 +4616,23 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 		 */
 
 		delta = evict_pages(lruvec, sc, swappiness, &swapped);
+
+		/*
+		 * Track swap pages untuk rate limiting.
+		 * Estimate: assume ~50% of evicted pages are swapped.
+		 */
+		if (swapped)
+			swap_pages_this_cycle += delta / 2;
+
+		/*
+		 * Smooth transition: Yield CPU setelah batch swap tertentu.
+		 * Memberi kesempatan UI/foreground task untuk run.
+		 * Prevents long compression pauses yang bikin UI freeze.
+		 */
+		if (swap_pages_this_cycle >= sysctl_mglru_max_swap_batch / 2) {
+			/* Swapped cukup banyak, yield sebentar */
+			cond_resched();
+		}
 
 		/*
 		 * Track reclaim effectiveness for PSI
@@ -4632,6 +4676,15 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 		sc->memcgs_need_aging = false;
 	if (!swapped)
 		sc->memcgs_need_swapping = false;
+
+	/*
+	 * Smooth transition tracking:
+	 * If we hit swap batch limit, this indicates high memory pressure.
+	 * LMKD should see this via PSI and act accordingly.
+	 */
+	if (swap_pages_this_cycle >= sysctl_mglru_max_swap_batch)
+		count_vm_event(PGSCAN_DIRECT_THROTTLE);
+
 done:
 	if (current_is_kswapd())
 		current->reclaim_state->mm_walk = NULL;

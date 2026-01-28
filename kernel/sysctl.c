@@ -105,6 +105,7 @@
 extern int sysctl_mglru_psi_threshold;
 extern int sysctl_mglru_psi_enabled;
 extern int sysctl_mglru_low_swap_opt;
+extern int sysctl_mglru_max_swap_batch;
 #endif
 /* External variables not in a header file. */
 extern int suid_dumpable;
@@ -141,6 +142,7 @@ static unsigned long long_max = LONG_MAX;
 static int ten = 10;
 static int one_hundred = 100;
 static int two_hundred = 200;
+static int five_hundred_twelve = 512;
 static int one_thousand = 1000;
 #ifdef CONFIG_PRINTK
 static int ten_thousand = 10000;
@@ -1630,6 +1632,15 @@ static struct ctl_table vm_table[] = {
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= &zero,
 		.extra2		= &one,
+	},
+	{
+		.procname	= "mglru_max_swap_batch",
+		.data		= &sysctl_mglru_max_swap_batch,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &ten,
+		.extra2		= &five_hundred_twelve,
 	},
 #endif
 	{
