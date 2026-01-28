@@ -2678,23 +2678,36 @@ static int get_swappiness(struct lruvec *lruvec, struct scan_control *sc)
 	swappiness = mem_cgroup_swappiness(memcg);
 
 	/*
-	 * Gaming optimization: Reduce swappiness when ZRAM usage is high.
-	 * This prevents CPU from being consumed by compress/decompress
-	 * instead of rendering game frames.
+	 * Adaptive swappiness: Aggressively reduce swap when ZRAM fills up.
+	 * This prevents CPU from being monopolized by compress/decompress
+	 * operations, keeping system responsive for gaming and UI.
 	 *
-	 * When ZRAM >75% full: Cut swappiness to 25%
-	 * When ZRAM >50% full: Cut swappiness in half
+	 * Multi-tier reduction based on ZRAM usage:
+	 * - ZRAM >95% full: swappiness → 5 (almost no swap, CPU relief)
+	 * - ZRAM >90% full: swappiness → 10 (minimal swap)
+	 * - ZRAM >80% full: swappiness → 15 (very low swap)
+	 * - ZRAM >60% full: swappiness → 30 (moderate reduction)
+	 * - ZRAM >40% full: swappiness → 50 (light reduction)
 	 *
-	 * Prefer reclaiming file pages (cache) over swapping anon pages.
-	 * Controlled by sysctl_mglru_low_swap_opt (default: enabled).
+	 * This prevents frame drops, UI stutters, and excessive CPU usage
+	 * from compression overhead. Prefers file cache reclaim instead.
 	 */
 	if (sysctl_mglru_low_swap_opt && swappiness > 0) {
-		if (nr_swap_pages < total_swap_pages / 4) {
-			/* ZRAM >75% full */
-			swappiness = swappiness / 4;
-		} else if (nr_swap_pages < total_swap_pages / 2) {
-			/* ZRAM >50% full */
-			swappiness = swappiness / 2;
+		if (nr_swap_pages < total_swap_pages / 20) {
+			/* ZRAM >95% full - almost stop swapping */
+			swappiness = 5;
+		} else if (nr_swap_pages < total_swap_pages / 10) {
+			/* ZRAM >90% full - minimal swapping */
+			swappiness = 10;
+		} else if (nr_swap_pages < total_swap_pages / 5) {
+			/* ZRAM >80% full - very low swapping */
+			swappiness = 15;
+		} else if (nr_swap_pages < (total_swap_pages * 2) / 5) {
+			/* ZRAM >60% full - moderate reduction */
+			swappiness = min(swappiness, 30);
+		} else if (nr_swap_pages < (total_swap_pages * 3) / 5) {
+			/* ZRAM >40% full - light reduction */
+			swappiness = min(swappiness, 50);
 		}
 	}
 
@@ -4594,15 +4607,25 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 		}
 
 		/*
-		 * Gaming optimization: If we've already swapped a lot in this cycle
-		 * and ZRAM is getting full, prefer file reclaim over more swapping.
-		 * This prevents frame drops from excessive compress/decompress.
+		 * Enhanced adaptive swappiness: Real-time ZRAM pressure check.
+		 * If already swapped this cycle and ZRAM is filling up,
+		 * dramatically reduce swappiness to prevent CPU monopolization.
 		 */
 		if (sysctl_mglru_low_swap_opt && swapped && swappiness > 0) {
 			long free_swap = mem_cgroup_get_nr_swap_pages(lruvec_memcg(lruvec));
-			if (free_swap < total_swap_pages / 3) {
-				/* ZRAM >66% full and already swapped this cycle */
-				swappiness = min(swappiness, 50);
+			
+			if (free_swap < total_swap_pages / 10) {
+				/* ZRAM >90% full - almost stop swapping immediately */
+				swappiness = 5;
+			} else if (free_swap < total_swap_pages / 5) {
+				/* ZRAM >80% full - minimal swapping */
+				swappiness = 10;
+			} else if (free_swap < (total_swap_pages * 2) / 5) {
+				/* ZRAM >60% full - low swapping */
+				swappiness = 20;
+			} else if (free_swap < total_swap_pages / 2) {
+				/* ZRAM >50% full - moderate reduction */
+				swappiness = min(swappiness, 40);
 			}
 		}
 
@@ -4625,13 +4648,22 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 			swap_pages_this_cycle += delta / 2;
 
 		/*
-		 * Smooth transition: Yield CPU setelah batch swap tertentu.
-		 * Memberi kesempatan UI/foreground task untuk run.
-		 * Prevents long compression pauses yang bikin UI freeze.
+		 * Frequent CPU yielding to prevent compression monopolization.
+		 * Yield more frequently as swap count increases, giving
+		 * UI/foreground tasks more opportunities to run.
 		 */
-		if (swap_pages_this_cycle >= sysctl_mglru_max_swap_batch / 2) {
-			/* Swapped cukup banyak, yield sebentar */
+		if (swap_pages_this_cycle >= sysctl_mglru_max_swap_batch / 4) {
+			/* Yield at 25% of batch limit (more frequent) */
 			cond_resched();
+		}
+		
+		/* Extra yield if ZRAM is getting very full */
+		if (sysctl_mglru_low_swap_opt && swapped) {
+			long free_swap = mem_cgroup_get_nr_swap_pages(lruvec_memcg(lruvec));
+			if (free_swap < total_swap_pages / 5) {
+				/* ZRAM >80% - yield even more to reduce CPU load */
+				cond_resched();
+			}
 		}
 
 		/*
