@@ -4606,29 +4606,6 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 			swappiness = min(swappiness / 4, 25);
 		}
 
-		/*
-		 * Enhanced adaptive swappiness: Real-time ZRAM pressure check.
-		 * If already swapped this cycle and ZRAM is filling up,
-		 * dramatically reduce swappiness to prevent CPU monopolization.
-		 */
-		if (sysctl_mglru_low_swap_opt && swapped && swappiness > 0) {
-			long free_swap = mem_cgroup_get_nr_swap_pages(lruvec_memcg(lruvec));
-			
-			if (free_swap < total_swap_pages / 10) {
-				/* ZRAM >90% full - almost stop swapping immediately */
-				swappiness = 5;
-			} else if (free_swap < total_swap_pages / 5) {
-				/* ZRAM >80% full - minimal swapping */
-				swappiness = 10;
-			} else if (free_swap < (total_swap_pages * 2) / 5) {
-				/* ZRAM >60% full - low swapping */
-				swappiness = 20;
-			} else if (free_swap < total_swap_pages / 2) {
-				/* ZRAM >50% full - moderate reduction */
-				swappiness = min(swappiness, 40);
-			}
-		}
-
 		nr_to_scan = get_nr_to_scan(lruvec, sc, swappiness, reclaimed, &need_aging);
 		if (!nr_to_scan)
 			goto done;
