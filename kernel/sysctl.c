@@ -101,6 +101,12 @@
 
 #if defined(CONFIG_SYSCTL)
 
+#ifdef CONFIG_LRU_GEN
+extern int sysctl_mglru_psi_threshold;
+extern int sysctl_mglru_psi_enabled;
+extern int sysctl_mglru_low_swap_opt;
+extern int sysctl_mglru_max_swap_batch;
+#endif
 /* External variables not in a header file. */
 extern int suid_dumpable;
 #ifdef CONFIG_COREDUMP
@@ -133,8 +139,10 @@ static int int_max = INT_MAX;
 static unsigned long zero_ul;
 static unsigned long one_ul = 1;
 static unsigned long long_max = LONG_MAX;
+static int ten = 10;
 static int one_hundred = 100;
 static int two_hundred = 200;
+static int five_hundred_twelve = 512;
 static int one_thousand = 1000;
 #ifdef CONFIG_PRINTK
 static int ten_thousand = 10000;
@@ -1597,6 +1605,44 @@ static struct ctl_table vm_table[] = {
 		.proc_handler	= min_free_kbytes_sysctl_handler,
 		.extra1		= &zero,
 	},
+#ifdef CONFIG_LRU_GEN
+	{
+		.procname	= "mglru_psi_threshold",
+		.data		= &sysctl_mglru_psi_threshold,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &one,
+		.extra2		= &ten,
+	},
+	{
+		.procname	= "mglru_psi_enabled",
+		.data		= &sysctl_mglru_psi_enabled,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &zero,
+		.extra2		= &one,
+	},
+	{
+		.procname	= "mglru_low_swap_opt",
+		.data		= &sysctl_mglru_low_swap_opt,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &zero,
+		.extra2		= &one,
+	},
+	{
+		.procname	= "mglru_max_swap_batch",
+		.data		= &sysctl_mglru_max_swap_batch,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &ten,
+		.extra2		= &five_hundred_twelve,
+	},
+#endif
 	{
 		.procname	= "percpu_pagelist_fraction",
 		.data		= &percpu_pagelist_fraction,
