@@ -7,6 +7,7 @@
 
 #include <linux/spinlock.h>
 #include <linux/list.h>
+#include <linux/list_nulls.h>
 #include <linux/wait.h>
 #include <linux/bitops.h>
 #include <linux/cache.h>
@@ -346,10 +347,10 @@ struct lru_gen_struct {
 	unsigned long min_seq[ANON_AND_FILE];
 	/* the birth time of each generation in jiffies */
 	unsigned long timestamps[MAX_NR_GENS];
-	/* the multi-gen LRU lists */
+	/* the multi-gen LRU lists, lazily sorted on eviction */
 	struct list_head lists[MAX_NR_GENS][ANON_AND_FILE][MAX_NR_ZONES];
-	/* the sizes of the above lists */
-	unsigned long nr_pages[MAX_NR_GENS][ANON_AND_FILE][MAX_NR_ZONES];
+	/* the multi-gen LRU sizes, eventually consistent */
+	long nr_pages[MAX_NR_GENS][ANON_AND_FILE][MAX_NR_ZONES];
 	/* the exponential moving average of refaulted */
 	unsigned long avg_refaulted[ANON_AND_FILE][MAX_NR_TIERS];
 	/* the exponential moving average of evicted+protected */
@@ -361,20 +362,25 @@ struct lru_gen_struct {
 	atomic_long_t refaulted[NR_HIST_GENS][ANON_AND_FILE][MAX_NR_TIERS];
 	/* whether the multi-gen LRU is enabled */
 	bool enabled;
+#ifdef CONFIG_MEMCG
+	/* the memcg generation this lru_gen_struct belongs to */
+	u8 gen;
+	/* the list segment this lru_gen_struct belongs to */
+	u8 seg;
+	/* per-node lru_gen_struct list for global reclaim */
+	struct hlist_nulls_node list;
+#endif
 };
 
 enum {
-	MM_PTE_TOTAL,	/* total leaf entries */
-	MM_PTE_OLD,	/* old leaf entries */
-	MM_PTE_YOUNG,	/* young leaf entries */
-	MM_PMD_TOTAL,	/* total non-leaf entries */
-	MM_PMD_FOUND,	/* non-leaf entries found in Bloom filters */
-	MM_PMD_ADDED,	/* non-leaf entries added to Bloom filters */
+	MM_LEAF_TOTAL,		/* total leaf entries */
+	MM_LEAF_OLD,		/* old leaf entries */
+	MM_LEAF_YOUNG,		/* young leaf entries */
+	MM_NONLEAF_TOTAL,	/* total non-leaf entries */
+	MM_NONLEAF_FOUND,	/* non-leaf entries found in Bloom filters */
+	MM_NONLEAF_ADDED,	/* non-leaf entries added to Bloom filters */
 	NR_MM_STATS
 };
-
-/* mnemonic codes for the mm stats above */
-#define MM_STAT_CODES		"toydfa"
 
 /* double-buffering Bloom filters */
 #define NR_BLOOM_FILTERS	2
@@ -382,18 +388,14 @@ enum {
 struct lru_gen_mm_state {
 	/* set to max_seq after each iteration */
 	unsigned long seq;
-	/* where the current iteration starts (inclusive) */
+	/* where the current iteration continues after */
 	struct list_head *head;
-	/* where the last iteration ends (exclusive) */
+	/* where the last iteration ended before */
 	struct list_head *tail;
-	/* to wait for the last page table walker to finish */
-	struct wait_queue_head wait;
 	/* Bloom filters flip after each iteration */
 	unsigned long *filters[NR_BLOOM_FILTERS];
 	/* the mm stats for debugging */
 	unsigned long stats[NR_HIST_GENS][NR_MM_STATS];
-	/* the number of concurrent page table walkers */
-	int nr_walkers;
 };
 
 struct lru_gen_mm_walk {
@@ -403,8 +405,6 @@ struct lru_gen_mm_walk {
 	unsigned long max_seq;
 	/* the next address within an mm to scan */
 	unsigned long next_addr;
-	/* to batch page table entries */
-	unsigned long bitmap[BITS_TO_LONGS(MIN_LRU_BATCH)];
 	/* to batch promoted pages */
 	int nr_pages[MAX_NR_GENS][ANON_AND_FILE][MAX_NR_ZONES];
 	/* to batch the mm stats */
@@ -412,10 +412,11 @@ struct lru_gen_mm_walk {
 	/* total batched items */
 	int batched;
 	bool can_swap;
-	bool full_scan;
+	bool force_scan;
 };
 
 void lru_gen_init_lruvec(struct lruvec *lruvec);
+void lru_gen_init_pgdat(struct pglist_data *pgdat);
 void *lru_gen_eviction(struct page *page);
 void lru_gen_refault(struct page *page, void *shadow);
 void lru_gen_look_around(struct page_vma_mapped_walk *pvmw);
@@ -423,11 +424,33 @@ void lru_gen_look_around(struct page_vma_mapped_walk *pvmw);
 #ifdef CONFIG_MEMCG
 void lru_gen_init_memcg(struct mem_cgroup *memcg);
 void lru_gen_exit_memcg(struct mem_cgroup *memcg);
+void lru_gen_online_memcg(struct mem_cgroup *memcg);
+void lru_gen_offline_memcg(struct mem_cgroup *memcg);
+void lru_gen_release_memcg(struct mem_cgroup *memcg);
+void lru_gen_soft_reclaim(struct lruvec *lruvec);
 #endif
+
+#define MEMCG_NR_GENS	2
+#define MEMCG_NR_BINS	8
+
+struct lru_gen_memcg {
+	/* the per-node memcg generation counter */
+	unsigned long seq;
+	/* number of memcgs per generation */
+	unsigned long nr_memcgs[MEMCG_NR_GENS];
+	/* per-node and per-generation lru_gen_struct list */
+	struct hlist_nulls_head	fifo[MEMCG_NR_GENS][MEMCG_NR_BINS];
+	/* protects the above */
+	spinlock_t lock;
+};
 
 #else /* !CONFIG_LRU_GEN */
 
 static inline void lru_gen_init_lruvec(struct lruvec *lruvec)
+{
+}
+
+static inline void lru_gen_init_pgdat(struct pglist_data *pgdat)
 {
 }
 
@@ -450,6 +473,22 @@ static inline void lru_gen_init_memcg(struct mem_cgroup *memcg)
 }
 
 static inline void lru_gen_exit_memcg(struct mem_cgroup *memcg)
+{
+}
+
+static inline void lru_gen_online_memcg(struct mem_cgroup *memcg)
+{
+}
+
+static inline void lru_gen_offline_memcg(struct mem_cgroup *memcg)
+{
+}
+
+static inline void lru_gen_release_memcg(struct mem_cgroup *memcg)
+{
+}
+
+static inline void lru_gen_soft_reclaim(struct lruvec *lruvec)
 {
 }
 #endif
@@ -951,6 +990,8 @@ typedef struct pglist_data {
 #ifdef CONFIG_LRU_GEN
 	/* kswap mm walk data */
 	struct lru_gen_mm_walk	mm_walk;
+	/* per-node memcg LRU for global reclaim */
+	struct lru_gen_memcg	memcg_lru;
 #endif
 
 	ZONE_PADDING(_pad2_)
