@@ -2960,8 +2960,12 @@ static int mglru_aging_smoothed __read_mostly = MGLRU_AGING_NORMAL;
  *  NONE         | idle                   | 0.5x (5)
  *  LOW          | light multitasking     | 0.8x (8)
  *  MODERATE     | normal load            | 1.0x (10)
- *  HIGH         | starting to thrash     | 1.4x (14)
- *  CRITICAL     | near OOM               | 1.8x (18)
+ *  HIGH         | starting to thrash     | 1.3x (13)
+ *  CRITICAL     | near OOM               | 2.0x (20)
+ *
+ *  The gap between HIGH and CRITICAL is intentionally wide (1.3x vs 2.0x)
+ *  so the system has a clear "emergency gear" when approaching OOM, rather
+ *  than a gradual ramp that may not respond fast enough.
  */
 static int mglru_pressure_to_aging(enum mglru_pressure_level level)
 {
@@ -2973,9 +2977,9 @@ static int mglru_pressure_to_aging(enum mglru_pressure_level level)
 	case MGLRU_PRESSURE_MODERATE:
 		return 10;
 	case MGLRU_PRESSURE_HIGH:
-		return 14;
+		return 13;
 	case MGLRU_PRESSURE_CRITICAL:
-		return 18;
+		return 20;
 	default:
 		return MGLRU_AGING_NORMAL;
 	}
@@ -3024,8 +3028,23 @@ static int mglru_safety_dampener(void)
  *  10–30%       | neutral              | 1.0x (no change)
  *  > 30%        | reclaim is wrong     | 0.6x (slow down, wrong pages evicted)
  *
+ * Minimum sample guard:
+ *  The refault ratio is meaningless with too few data points — a single
+ *  refault out of 3 evictions looks like 33% ("terrible!") but is just
+ *  noise. We require a minimum number of total evictions before trusting
+ *  the ratio. Below that threshold we return neutral (1.0×) so the
+ *  pressure and safety factors still drive aging normally.
+ *
+ *  Threshold: 4 × MIN_LRU_BATCH (typically 4 × 64 = 256 pages).
+ *  This covers:
+ *   - Early boot: almost no evictions yet → neutral
+ *   - Idle device: avg_total decays toward zero → neutral
+ *   - Cold cache after app switch: small burst → neutral
+ *
  * Returns a multiplier (×10 scale).
  */
+#define MGLRU_REFAULT_MIN_SAMPLE	(4 * MIN_LRU_BATCH)
+
 static int mglru_refault_adjustment(struct lruvec *lruvec)
 {
 	int type, tier;
@@ -3041,8 +3060,16 @@ static int mglru_refault_adjustment(struct lruvec *lruvec)
 		}
 	}
 
-	/* No data yet → neutral */
-	if (total_evicted < MIN_LRU_BATCH)
+	/*
+	 * Minimum sample guard: don't trust the refault ratio until we
+	 * have accumulated enough eviction history. With fewer than
+	 * MGLRU_REFAULT_MIN_SAMPLE pages of data, the ratio is dominated
+	 * by noise — a handful of refaults can swing it wildly.
+	 *
+	 * Return neutral so pressure × safety still work correctly;
+	 * we simply don't apply a correctness adjustment yet.
+	 */
+	if (total_evicted < MGLRU_REFAULT_MIN_SAMPLE)
 		return 10;
 
 	refault_pct = total_refaulted * 100 / total_evicted;
@@ -3085,12 +3112,34 @@ static int mglru_compute_aging_speed(struct lruvec *lruvec, int priority)
 
 	/*
 	 * Combine: base × safety × refault, all in ×10 scale.
-	 * Example: 14 × 7 × 6 = 588, / 100 = 5 (→0.5x final)
+	 * Example: 13 × 7 × 6 = 546, / 100 = 5 (→0.5x final)
 	 *   HIGH pressure but safe RAM + bad refaults = slow aging
-	 * Example: 18 × 10 × 12 = 2160, / 100 = 21 (→2.1x final)
+	 * Example: 20 × 10 × 12 = 2400, / 100 = 24 (→2.4x final)
 	 *   CRITICAL + unsafe + good refaults = fast aging
 	 */
 	combined = base * safety * refault / 100;
+
+	/*
+	 * Pressure floor override:
+	 *
+	 * The safety dampener and refault brake can multiply down so
+	 * aggressively that even HIGH/CRITICAL pressure produces a
+	 * combined multiplier below 1.0× — meaning reclaim is *slower*
+	 * than baseline exactly when the system needs it most.
+	 *
+	 * Fix: enforce a minimum floor based on the pressure level.
+	 *  - CRITICAL: floor at 1.0× (10) — never slower than baseline
+	 *  - HIGH:     floor at 0.8× (8)  — allow slight slowdown only
+	 *  - Others:   no floor (safety/refault may fully dampen)
+	 *
+	 * This ensures the system always has a "minimum gear" at high
+	 * pressure, while still allowing the dampeners to work at lower
+	 * pressure levels where being conservative is acceptable.
+	 */
+	if (level >= MGLRU_PRESSURE_CRITICAL && combined < 10)
+		combined = 10;
+	else if (level >= MGLRU_PRESSURE_HIGH && combined < 8)
+		combined = 8;
 
 	/* Step 4: Smoothing — EMA with 75% history / 25% new */
 	smoothed = (3 * mglru_aging_smoothed + combined) / 4;
