@@ -106,6 +106,8 @@ extern int sysctl_mglru_psi_threshold;
 extern int sysctl_mglru_psi_enabled;
 extern int sysctl_mglru_low_swap_opt;
 extern int sysctl_mglru_max_swap_batch;
+extern int sysctl_mglru_psi_safety_mb;
+extern int sysctl_mglru_psi_debounce;
 #endif
 /* External variables not in a header file. */
 extern int suid_dumpable;
@@ -1717,6 +1719,24 @@ static struct ctl_table vm_table[] = {
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= &ten,
 		.extra2		= &five_hundred_twelve,
+	},
+	{
+		.procname	= "mglru_psi_safety_mb",
+		.data		= &sysctl_mglru_psi_safety_mb,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &ten,
+		.extra2		= &one_thousand,
+	},
+	{
+		.procname	= "mglru_psi_debounce",
+		.data		= &sysctl_mglru_psi_debounce,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &two,
+		.extra2		= &ten,
 	},
 #endif
 	{
