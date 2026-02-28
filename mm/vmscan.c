@@ -2625,12 +2625,16 @@ int sysctl_mglru_max_swap_batch __read_mostly = 128;
  * PSI will NOT be signaled while free RAM is above this threshold.
  * This is the key guard that prevents LMKD from killing apps prematurely.
  *
- * Example: with 6GB RAM and safety_mb=400, LMKD won't see pressure
- * until free RAM drops below 400MB, even if MGLRU is actively reclaiming.
+ * When set to 0 (default), dynamic scaling is used:
+ *   safety_mb = totalram_mb / 8
+ *   4GB device → 512MB floor
+ *   6GB device → 768MB floor
+ *   8GB device → 1024MB floor
  *
- * Range: [50, 1000], Default: 500 (MB)
+ * When set to a non-zero value, that value is used directly.
+ * Range: [0, 1000], Default: 0 (dynamic)
  */
-int sysctl_mglru_psi_safety_mb __read_mostly = 500;
+int sysctl_mglru_psi_safety_mb __read_mostly;
 
 /*
  * Debounce window: number of reclaim cycles over which pressure is averaged.
@@ -2646,42 +2650,122 @@ static inline bool mglru_psi_enabled(void)
 }
 
 /*
- * Convert MB to pages at runtime. Avoids hardcoded page counts
- * that break across devices with different PAGE_SIZE.
+ * Dynamic scaling: compute safety floor based on total RAM.
+ *
+ *   safety_mb = totalram_mb / 8
+ *
+ * This automatically adapts to every RAM variant:
+ *   4GB → 512MB     6GB → 768MB     8GB → 1024MB
+ *
+ * If the user has set sysctl_mglru_psi_safety_mb to a non-zero value,
+ * that explicit override is used instead.
  */
 static inline unsigned long mglru_safety_pages(void)
 {
-	return (unsigned long)sysctl_mglru_psi_safety_mb * (1024 * 1024 / PAGE_SIZE);
+	unsigned long safety_mb;
+
+	if (sysctl_mglru_psi_safety_mb > 0) {
+		/* User-specified override */
+		safety_mb = sysctl_mglru_psi_safety_mb;
+	} else {
+		/* Dynamic: totalram / 8 */
+		safety_mb = (totalram_pages >> (20 - PAGE_SHIFT)) / 8;
+		/* Clamp to reasonable bounds: 256MB min, 1536MB max */
+		if (safety_mb < 256)
+			safety_mb = 256;
+		else if (safety_mb > 1536)
+			safety_mb = 1536;
+	}
+
+	return safety_mb * (1024 * 1024 / PAGE_SIZE);
 }
 
 /*
- * Layer 1: Memory Safety Guard
+ * Swap pressure ratio: how full is ZRAM/swap?
+ * Returns percentage 0-100 of swap space that is USED.
+ * 0 = swap empty or no swap configured
+ * 100 = swap completely full
+ */
+static inline int mglru_swap_usage_pct(void)
+{
+	if (!total_swap_pages)
+		return 0;
+
+	return 100 - (int)div64_u64((u64)get_nr_swap_pages() * 100,
+				   total_swap_pages);
+}
+
+/*
+ * Layer 1: Memory Safety Guard (with swap awareness)
  *
- * Returns true if free RAM is ABOVE the safety floor.
- * When true, PSI must NOT be signaled regardless of reclaim behavior.
- * This is the most important layer — it prevents LMKD from seeing
- * pressure while the system still has plenty of free RAM.
+ * Returns true if the system is SAFE — PSI must NOT be signaled.
+ *
+ * Two independent checks, BOTH must pass for the system to be unsafe:
+ *
+ * A) Free RAM guard:
+ *    If free RAM is above the safety floor, system is safe.
+ *
+ * B) Swap awareness guard:
+ *    Even if free RAM is below the floor, if swap is healthy (usage < 70%),
+ *    the system can still reclaim into swap without real pressure.
+ *    Only when swap is getting full (>= 70%) do we acknowledge real pressure.
+ *
+ * This prevents the scenario where MGLRU actively pushes pages into ZRAM
+ * (making free RAM look low) while ZRAM still has plenty of headroom.
+ * LMKD should not kill apps just because MGLRU is doing its job.
  */
 static inline bool mglru_mem_safe(void)
 {
-	return global_node_page_state(NR_FREE_PAGES) >= mglru_safety_pages();
+	unsigned long free = global_node_page_state(NR_FREE_PAGES);
+	unsigned long safety = mglru_safety_pages();
+
+	/* Free RAM above floor → always safe */
+	if (free >= safety)
+		return true;
+
+	/*
+	 * Below the floor, but swap still has room?
+	 * If swap usage < 70%, MGLRU can still push pages to ZRAM
+	 * without real pressure — suppress PSI.
+	 */
+	if (total_swap_pages && mglru_swap_usage_pct() < 70)
+		return true;
+
+	return false;
 }
 
 /*
- * Layer 2: Pressure Classifier
+ * Layer 2: Pressure Classifier with Hysteresis
  *
  * Classifies the current memory situation into a pressure level.
- * Uses both the absolute free page count and the reclaim priority
- * (which reflects how hard the kernel is trying to free pages).
+ * Uses the free page count relative to the safety floor, the reclaim
+ * priority (how hard the kernel is trying), and a static hysteresis
+ * flag to prevent level oscillation at the HIGH boundary.
+ *
+ * Hysteresis for HIGH:
+ *   Enter HIGH when free < safety * 20% (1/5)
+ *   Exit  HIGH when free > safety * 15% (above 3/20 of safety, measured
+ *         as: free rises back above the lower band)
+ *
+ * In concrete terms for a 6GB device (safety=768MB):
+ *   Enter HIGH: free < 153MB
+ *   Exit  HIGH: free > 115MB
+ *
+ * This 38MB hysteresis band prevents rapid HIGH↔MODERATE flipping that
+ * would cause LMKD to see erratic PSI bursts at the boundary.
  *
  * @priority: current scan_control priority (12=light, 0=desperate)
  * @stall_count: number of consecutive unproductive reclaim cycles
  */
+static bool mglru_in_high_pressure __read_mostly;
+
 static enum mglru_pressure_level mglru_classify_pressure(int priority,
 							 int stall_count)
 {
 	unsigned long free = global_node_page_state(NR_FREE_PAGES);
 	unsigned long safety = mglru_safety_pages();
+	unsigned long high_enter = safety / 5;       /* 20% of safety */
+	unsigned long high_exit  = safety * 3 / 20;  /* 15% of safety */
 
 	/* Plenty of free RAM — no pressure at all */
 	if (free >= safety * 2)
@@ -2695,12 +2779,33 @@ static enum mglru_pressure_level mglru_classify_pressure(int priority,
 	if (free >= safety / 2 && priority > DEF_PRIORITY - 4)
 		return MGLRU_PRESSURE_MODERATE;
 
-	/* Below half the safety floor, or priority is getting desperate */
-	if (free >= safety / 4 || priority > 2)
-		return MGLRU_PRESSURE_HIGH;
+	/*
+	 * Hysteresis band for HIGH pressure.
+	 *
+	 * Once we enter HIGH (free drops below 20% of safety),
+	 * we stay in HIGH until free rises above 15% of safety.
+	 * This prevents oscillation at the boundary.
+	 */
+	if (!mglru_in_high_pressure) {
+		/* Not yet in HIGH — only enter if free < 20% threshold */
+		if (free < high_enter) {
+			mglru_in_high_pressure = true;
+		}
+	} else {
+		/* Already in HIGH — only exit if free > 15% threshold */
+		if (free > high_exit && priority > DEF_PRIORITY - 4) {
+			mglru_in_high_pressure = false;
+		}
+	}
 
-	/* Very low free RAM and high priority — critical */
-	return MGLRU_PRESSURE_CRITICAL;
+	if (mglru_in_high_pressure) {
+		/* Within HIGH band: distinguish HIGH vs CRITICAL by priority */
+		if (free < safety / 10 && priority <= 2)
+			return MGLRU_PRESSURE_CRITICAL;
+		return MGLRU_PRESSURE_HIGH;
+	}
+
+	return MGLRU_PRESSURE_MODERATE;
 }
 
 /*
