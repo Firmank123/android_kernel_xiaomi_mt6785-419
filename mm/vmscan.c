@@ -3095,9 +3095,26 @@ static int mglru_refault_adjustment(struct lruvec *lruvec)
  * Returns: aging multiplier in ×10 scale, clamped to [3, 25].
  *          Caller applies as: nr_to_scan = nr_to_scan * mult / 10
  */
+/*
+ * Floor hysteresis flag: prevents jitter when pressure bounces
+ * rapidly between HIGH and CRITICAL. Once the floor is activated
+ * at a given level, it stays sticky until pressure drops below HIGH.
+ *
+ *  Without hysteresis:
+ *    tick 1: CRITICAL → floor 10 applied
+ *    tick 2: HIGH     → floor drops to 8, combined jumps down
+ *    tick 3: CRITICAL → floor 10 again, combined jumps up
+ *    → jitter in aging speed despite similar real pressure
+ *
+ *  With hysteresis:
+ *    Once CRITICAL floor (10) is activated, it stays active until
+ *    pressure drops below HIGH entirely. This smooths the transition.
+ */
+static int mglru_floor_active __read_mostly;  /* 0=none, 8=HIGH, 10=CRITICAL */
+
 static int mglru_compute_aging_speed(struct lruvec *lruvec, int priority)
 {
-	int base, safety, refault, combined, smoothed;
+	int base, safety, refault, combined, floor, smoothed;
 	enum mglru_pressure_level level;
 
 	/* Step 1: Pressure → base aging target */
@@ -3120,31 +3137,60 @@ static int mglru_compute_aging_speed(struct lruvec *lruvec, int priority)
 	combined = base * safety * refault / 100;
 
 	/*
-	 * Pressure floor override:
+	 * Pressure floor override with hysteresis:
 	 *
-	 * The safety dampener and refault brake can multiply down so
-	 * aggressively that even HIGH/CRITICAL pressure produces a
-	 * combined multiplier below 1.0× — meaning reclaim is *slower*
-	 * than baseline exactly when the system needs it most.
+	 * The safety dampener and refault brake can stack so aggressively
+	 * that even HIGH/CRITICAL pressure produces a combined multiplier
+	 * below 1.0× — making reclaim slower when the system needs it most.
 	 *
-	 * Fix: enforce a minimum floor based on the pressure level.
-	 *  - CRITICAL: floor at 1.0× (10) — never slower than baseline
-	 *  - HIGH:     floor at 0.8× (8)  — allow slight slowdown only
-	 *  - Others:   no floor (safety/refault may fully dampen)
+	 * Floor values:
+	 *  - CRITICAL: 1.0× (10) — never slower than baseline
+	 *  - HIGH:     0.8× (8)  — allow only slight slowdown
+	 *  - Others:   no floor
 	 *
-	 * This ensures the system always has a "minimum gear" at high
-	 * pressure, while still allowing the dampeners to work at lower
-	 * pressure levels where being conservative is acceptable.
+	 * Hysteresis: once a higher floor is activated, it stays sticky
+	 * until pressure drops below HIGH. This prevents the floor itself
+	 * from causing jitter when pressure bounces at the HIGH↔CRITICAL
+	 * boundary (which is common under real workloads).
 	 */
-	if (level >= MGLRU_PRESSURE_CRITICAL && combined < 10)
-		combined = 10;
-	else if (level >= MGLRU_PRESSURE_HIGH && combined < 8)
-		combined = 8;
+	floor = 0;
+	if (level >= MGLRU_PRESSURE_CRITICAL)
+		floor = 10;
+	else if (level >= MGLRU_PRESSURE_HIGH)
+		floor = 8;
 
-	/* Step 4: Smoothing — EMA with 75% history / 25% new */
+	/* Hysteresis: keep the higher floor until pressure drops below HIGH */
+	if (floor >= mglru_floor_active)
+		mglru_floor_active = floor;	/* Escalate or maintain */
+	else if (level < MGLRU_PRESSURE_HIGH)
+		mglru_floor_active = 0;		/* Fully de-escalated */
+	/* else: HIGH but was CRITICAL → keep CRITICAL floor (sticky) */
+
+	if (mglru_floor_active && combined < mglru_floor_active)
+		combined = mglru_floor_active;
+
+	/*
+	 * Step 4: Pre-EMA clamp → EMA → final clamp
+	 *
+	 * Why clamp before EMA?
+	 * Without pre-clamp, a single extreme spike (e.g., combined = 40)
+	 * bleeds into the EMA for several ticks even after the spike is
+	 * gone, because (3×old + 40) / 4 carries the outlier forward.
+	 *
+	 * Pipeline: raw → clamp [MIN, MAX] → EMA → clamp [MIN, MAX]
+	 *
+	 * The first clamp rejects outliers at the input.
+	 * The second clamp catches any EMA drift from rounding.
+	 */
+	if (combined < MGLRU_AGING_MIN)
+		combined = MGLRU_AGING_MIN;
+	else if (combined > MGLRU_AGING_MAX)
+		combined = MGLRU_AGING_MAX;
+
+	/* EMA: 75% history / 25% new sample */
 	smoothed = (3 * mglru_aging_smoothed + combined) / 4;
 
-	/* Step 5: Clamp to safe bounds */
+	/* Final clamp (catch rounding drift) */
 	if (smoothed < MGLRU_AGING_MIN)
 		smoothed = MGLRU_AGING_MIN;
 	else if (smoothed > MGLRU_AGING_MAX)
