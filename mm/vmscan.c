@@ -2563,19 +2563,38 @@ module_param_named(scan_anon_prio, scan_anon_priority, int, 0644);
  *
  *  Architecture overview:
  *
- *     PSI (raw pressure signal)
- *               │
- *     averaging + debounce
- *               │
- *     pressure classifier
- *               │
- *     memory safety guard
- *               │
- *             MGLRU
+ *       PSI (raw pressure signal)
+ *                │
+ *      averaging + debounce
+ *                │
+ *      pressure classifier ──────┐
+ *                │                │
+ *      memory safety guard       │
+ *                │                │
+ *              MGLRU              │
+ *                                 │
+ *  ┌──────────────────────────────┘
+ *  │    Adaptive Aging Controller
+ *  │
+ *  │  AGING_SPEED = Pressure (urgency)
+ *  │             × Refault  (correctness)
+ *  │             × Safety   (permission)
+ *  │
+ *  │   ┌─ Pressure Classifier → base aging speed
+ *  │   ├─ Memory Safety Guard → dampener
+ *  │   ├─ Refault feedback    → correction
+ *  │   ├─ EMA smoothing       → stability
+ *  │   └─ Clamp [0.3x, 2.5x] → bounds
+ *  │                │
+ *  └──────→ MGLRU aging (nr_to_scan scaling)
  *
- *  This prevents premature OOM kills by LMKD when free RAM is still
- *  abundant. PSI signals are only emitted when the system is genuinely
- *  under memory pressure, not during routine MGLRU background reclaim.
+ *  PSI Gating: prevents premature OOM kills by LMKD when free RAM is
+ *  still abundant. PSI signals are only emitted when genuinely under
+ *  memory pressure, not during routine MGLRU background reclaim.
+ *
+ *  Adaptive Aging: makes MGLRU scan speed proportional to actual
+ *  pressure, refault accuracy, and available RAM — so the system
+ *  ages pages faster when it needs to, and slower when it doesn't.
  ******************************************************************************/
 
 /*
@@ -2882,6 +2901,209 @@ static bool mglru_should_signal_psi(int priority, int debounced_stall)
 		return debounced_stall >= sysctl_mglru_psi_threshold;
 
 	return false;
+}
+
+/******************************************************************************
+ *                    Adaptive Aging Controller
+ *
+ *  Connects the Pressure Classifier to MGLRU aging speed.
+ *
+ *  AGING_SPEED = Pressure (urgency)
+ *              × Refault  (correctness)
+ *              × Safety   (permission)
+ *
+ *  Flow:
+ *              PSI
+ *               │
+ *      Pressure Classifier
+ *               │
+ *       base aging speed
+ *               │
+ *      Memory Safety Guard
+ *      (RAM enough? slow down)
+ *               │
+ *        Refault feedback
+ *      (reclaim correct?)
+ *               │
+ *          Smoothing
+ *               │
+ *            Clamp
+ *               │
+ *         MGLRU aging
+ *
+ *  All arithmetic uses fixed-point ×10 scale to avoid floating point.
+ *  A multiplier of 10 = 1.0x, 5 = 0.5x, 18 = 1.8x, etc.
+ ******************************************************************************/
+
+/* Clamp bounds for the final aging multiplier (×10 scale) */
+#define MGLRU_AGING_MIN		3	/* 0.3x — never fully stop aging */
+#define MGLRU_AGING_MAX		25	/* 2.5x — never overshoot too much */
+#define MGLRU_AGING_NORMAL	10	/* 1.0x — baseline */
+
+/*
+ * Smoothing state: exponential moving average of the aging multiplier.
+ * Prevents abrupt changes when pressure oscillates at level boundaries.
+ *
+ * Formula: smoothed = (3 * smoothed + new) / 4
+ * This gives ~75% weight to history, 25% to the new sample.
+ */
+static int mglru_aging_smoothed __read_mostly = MGLRU_AGING_NORMAL;
+
+/*
+ * Step 1: Pressure → Base Aging Speed
+ *
+ * Maps the pressure level to a target aging multiplier (×10 scale).
+ * Higher pressure = faster aging to find cold pages more quickly.
+ *
+ *  Pressure     | Meaning               | Multiplier
+ *  -------------|------------------------|----------
+ *  NONE         | idle                   | 0.5x (5)
+ *  LOW          | light multitasking     | 0.8x (8)
+ *  MODERATE     | normal load            | 1.0x (10)
+ *  HIGH         | starting to thrash     | 1.4x (14)
+ *  CRITICAL     | near OOM               | 1.8x (18)
+ */
+static int mglru_pressure_to_aging(enum mglru_pressure_level level)
+{
+	switch (level) {
+	case MGLRU_PRESSURE_NONE:
+		return 5;
+	case MGLRU_PRESSURE_LOW:
+		return 8;
+	case MGLRU_PRESSURE_MODERATE:
+		return 10;
+	case MGLRU_PRESSURE_HIGH:
+		return 14;
+	case MGLRU_PRESSURE_CRITICAL:
+		return 18;
+	default:
+		return MGLRU_AGING_NORMAL;
+	}
+}
+
+/*
+ * Step 2: Memory Safety Guard → Permission Dampener
+ *
+ * If free RAM is still plentiful, slow down aging regardless of
+ * what the pressure classifier says. This prevents aggressive
+ * aging from evicting useful pages when there's no real urgency.
+ *
+ * Returns a multiplier (×10 scale):
+ *   10 = no dampening (free RAM below safety)
+ *   7  = light dampening (free RAM above safety)
+ *   5  = strong dampening (free RAM well above safety)
+ */
+static int mglru_safety_dampener(void)
+{
+	unsigned long free = global_node_page_state(NR_FREE_PAGES);
+	unsigned long safety = mglru_safety_pages();
+
+	/* Free RAM well above safety → strong dampening */
+	if (free >= safety * 2)
+		return 5;
+
+	/* Free RAM above safety → light dampening */
+	if (free >= safety)
+		return 7;
+
+	/* Below safety → no dampening, let pressure drive */
+	return 10;
+}
+
+/*
+ * Step 3: Refault Feedback → Correctness Adjustment (MOST IMPORTANT)
+ *
+ * Measures how effective recent reclaim was by looking at the refault
+ * ratio across all tiers for a given lruvec.
+ *
+ *   refault_rate = total_refaulted / total_evicted (×100 for percentage)
+ *
+ *  Refault rate | Meaning              | Adjustment
+ *  -------------|----------------------|----------
+ *  < 10%        | reclaim is accurate  | 1.2x (speed up, we're picking well)
+ *  10–30%       | neutral              | 1.0x (no change)
+ *  > 30%        | reclaim is wrong     | 0.6x (slow down, wrong pages evicted)
+ *
+ * Returns a multiplier (×10 scale).
+ */
+static int mglru_refault_adjustment(struct lruvec *lruvec)
+{
+	int type, tier;
+	unsigned long total_refaulted = 0;
+	unsigned long total_evicted = 0;
+	unsigned long refault_pct;
+	struct lru_gen_struct *lrugen = &lruvec->lrugen;
+
+	for (type = 0; type < ANON_AND_FILE; type++) {
+		for (tier = 0; tier < MAX_NR_TIERS; tier++) {
+			total_refaulted += READ_ONCE(lrugen->avg_refaulted[type][tier]);
+			total_evicted += READ_ONCE(lrugen->avg_total[type][tier]);
+		}
+	}
+
+	/* No data yet → neutral */
+	if (total_evicted < MIN_LRU_BATCH)
+		return 10;
+
+	refault_pct = total_refaulted * 100 / total_evicted;
+
+	if (refault_pct < 10)
+		return 12;	/* Reclaim accurate → speed up aging */
+
+	if (refault_pct > 30)
+		return 6;	/* Reclaim inaccurate → slow down aging */
+
+	return 10;		/* Neutral */
+}
+
+/*
+ * Step 4+5: Smoothing + Clamp → Final Aging Multiplier
+ *
+ * Combines all three factors, applies exponential smoothing to prevent
+ * oscillation, and clamps the result to safe bounds.
+ *
+ * @lruvec: the lruvec being aged (for refault data)
+ * @priority: current reclaim priority (for pressure classification)
+ *
+ * Returns: aging multiplier in ×10 scale, clamped to [3, 25].
+ *          Caller applies as: nr_to_scan = nr_to_scan * mult / 10
+ */
+static int mglru_compute_aging_speed(struct lruvec *lruvec, int priority)
+{
+	int base, safety, refault, combined, smoothed;
+	enum mglru_pressure_level level;
+
+	/* Step 1: Pressure → base aging target */
+	level = mglru_classify_pressure(priority, 0);
+	base = mglru_pressure_to_aging(level);
+
+	/* Step 2: Safety guard dampener */
+	safety = mglru_safety_dampener();
+
+	/* Step 3: Refault correctness */
+	refault = mglru_refault_adjustment(lruvec);
+
+	/*
+	 * Combine: base × safety × refault, all in ×10 scale.
+	 * Example: 14 × 7 × 6 = 588, / 100 = 5 (→0.5x final)
+	 *   HIGH pressure but safe RAM + bad refaults = slow aging
+	 * Example: 18 × 10 × 12 = 2160, / 100 = 21 (→2.1x final)
+	 *   CRITICAL + unsafe + good refaults = fast aging
+	 */
+	combined = base * safety * refault / 100;
+
+	/* Step 4: Smoothing — EMA with 75% history / 25% new */
+	smoothed = (3 * mglru_aging_smoothed + combined) / 4;
+
+	/* Step 5: Clamp to safe bounds */
+	if (smoothed < MGLRU_AGING_MIN)
+		smoothed = MGLRU_AGING_MIN;
+	else if (smoothed > MGLRU_AGING_MAX)
+		smoothed = MGLRU_AGING_MAX;
+
+	mglru_aging_smoothed = smoothed;
+
+	return smoothed;
 }
 
 #ifdef CONFIG_LRU_GEN_ENABLED
@@ -4250,6 +4472,7 @@ static bool age_lruvec(struct lruvec *lruvec, struct scan_control *sc,
 {
 	bool need_aging;
 	long nr_to_scan;
+	int aging_mult;
 	int swappiness = get_swappiness(lruvec, sc);
 	struct mem_cgroup *memcg = lruvec_memcg(lruvec);
 	enum mem_cgroup_protection prot = mem_cgroup_protected(NULL, memcg);
@@ -4272,6 +4495,20 @@ static bool age_lruvec(struct lruvec *lruvec, struct scan_control *sc,
 		return false;
 
 	nr_to_scan >>= sc->priority;
+
+	/*
+	 * Adaptive aging: scale nr_to_scan by the computed aging multiplier.
+	 *
+	 * The multiplier is derived from:
+	 *   Pressure (urgency) × Safety (permission) × Refault (correctness)
+	 *
+	 * This makes aging faster under real pressure with accurate reclaim,
+	 * and slower when RAM is plentiful or eviction is hitting wrong pages.
+	 *
+	 * Multiplier is in ×10 scale: 10 = 1.0x, 14 = 1.4x, 6 = 0.6x
+	 */
+	aging_mult = mglru_compute_aging_speed(lruvec, sc->priority);
+	nr_to_scan = nr_to_scan * aging_mult / MGLRU_AGING_NORMAL;
 
 	if (!mem_cgroup_online(memcg))
 		nr_to_scan++;
@@ -4809,6 +5046,7 @@ static long get_nr_to_scan(struct lruvec *lruvec, struct scan_control *sc, bool 
 {
 	int priority;
 	long nr_to_scan;
+	int aging_mult;
 	struct mem_cgroup *memcg = lruvec_memcg(lruvec);
 	DEFINE_MAX_SEQ(lruvec);
 	DEFINE_MIN_SEQ(lruvec);
@@ -4830,6 +5068,16 @@ static long get_nr_to_scan(struct lruvec *lruvec, struct scan_control *sc, bool 
 		priority = sc->priority;
 
 	nr_to_scan >>= priority;
+
+	/*
+	 * Adaptive aging for direct reclaim path.
+	 * Scale scan target by the pressure × safety × refault multiplier.
+	 */
+	if (nr_to_scan) {
+		aging_mult = mglru_compute_aging_speed(lruvec, priority);
+		nr_to_scan = nr_to_scan * aging_mult / MGLRU_AGING_NORMAL;
+	}
+
 	if (!nr_to_scan)
 		goto out;
 
