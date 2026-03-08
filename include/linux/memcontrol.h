@@ -382,6 +382,17 @@ static inline struct lruvec *mem_cgroup_lruvec(struct pglist_data *pgdat,
 		goto out;
 	}
 
+	/*
+	 * NULL memcg means the page is uncharged (e.g. a kernel allocation or
+	 * a page racing with memcg teardown).  Fall back to root_mem_cgroup so
+	 * every caller always receives a valid lruvec.  This avoids a NULL
+	 * pointer dereference in mem_cgroup_nodeinfo(NULL, nid) which accesses
+	 * memcg->nodeinfo[nid] and faults at the nodeinfo[] offset (~0x9b8).
+	 * Upstream kernels (≥ 5.18) apply the same fix.
+	 */
+	if (!memcg)
+		memcg = root_mem_cgroup;
+
 	mz = mem_cgroup_nodeinfo(memcg, pgdat->node_id);
 	lruvec = &mz->lruvec;
 out:
