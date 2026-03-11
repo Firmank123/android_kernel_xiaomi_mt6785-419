@@ -235,12 +235,14 @@ static void mcdi_set_timer(int cpu)
 
 	spin_lock_irqsave(&mcdi_cluster_spin_lock, flags);
 
-	mcdi_cluster.tmr_running = true;
-	mcdi_cluster.owner = cpu;
+	if (!hrtimer_active(&mcdi_cluster.timer)) {
+		mcdi_cluster.tmr_running = true;
+		mcdi_cluster.owner = cpu;
 
-	RCU_NONIDLE(hrtimer_start(&mcdi_cluster.timer,
-			ns_to_ktime(time_us * NSEC_PER_USEC),
-			HRTIMER_MODE_REL_PINNED));
+		RCU_NONIDLE(hrtimer_start(&mcdi_cluster.timer,
+				ns_to_ktime(time_us * NSEC_PER_USEC),
+				HRTIMER_MODE_REL_PINNED));
+	}
 
 	spin_unlock_irqrestore(&mcdi_cluster_spin_lock, flags);
 
