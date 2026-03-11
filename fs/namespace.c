@@ -136,7 +136,9 @@ static void mnt_free_id(struct mount *mnt)
 		return;
 	}
 #endif
-	ida_free(&mnt_id_ida, mnt->mnt_id);
+	if (mnt->mnt_id < DEFAULT_KSU_MNT_ID) {
+		ida_free(&mnt_id_ida, mnt->mnt_id);
+	}
 }
 
 /*
@@ -3941,7 +3943,9 @@ void susfs_reorder_mnt_id(void) {
 void susfs_assign_fake_mnt_id(struct mount *mnt) {
 	lock_mount_hash();
 
-	ida_free(&mnt_id_ida, mnt->mnt_id);
+	if (mnt->mnt_id < DEFAULT_KSU_MNT_ID) {
+		ida_free(&mnt_id_ida, mnt->mnt_id);
+	}
 
 	mnt->mnt_id = DEFAULT_KSU_MNT_ID;
 	mnt->mnt_group_id = ida_alloc_min(&susfs_ksu_mnt_group_ida, DEFAULT_KSU_MNT_GROUP_ID, GFP_KERNEL);
