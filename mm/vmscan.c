@@ -4765,7 +4765,7 @@ void lru_gen_look_around(struct page_vma_mapped_walk *pvmw)
 	rcu_read_unlock();
 
 	/* feedback from rmap walkers to page table walkers */
-	if (suitable_to_scan(i, young))
+	if (pvmw->pmd && suitable_to_scan(i, young))
 		update_bloom_filter(lruvec, max_seq, pvmw->pmd);
 
 	walk = current->reclaim_state ? current->reclaim_state->mm_walk : NULL;
