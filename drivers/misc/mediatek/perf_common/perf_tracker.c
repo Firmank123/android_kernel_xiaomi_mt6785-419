@@ -13,6 +13,7 @@
 #include <linux/mm.h>
 #include <linux/swap.h>
 #include <helio-dvfsrc.h>
+#include "perf_tracker.h"
 
 #if IS_ENABLED(CONFIG_MTK_PERF_TRACKER_TRACE)
 #define CREATE_TRACE_POINTS
@@ -30,8 +31,8 @@
 static int perf_tracker_on;
 static DEFINE_MUTEX(perf_ctl_mutex);
 
-static struct mtk_btag_mictx_iostat_struct iostat;
 #ifdef CONFIG_MTK_BLOCK_TAG
+static struct mtk_btag_mictx_iostat_struct iostat;
 void  __attribute__((weak)) mtk_btag_mictx_enable(int enable) {}
 
 int __attribute__((weak)) mtk_btag_mictx_get_data(
@@ -109,7 +110,9 @@ void perf_tracker(u64 wallclock,
 		    long mm_free)
 {
 	int dram_rate = 0;
+#ifdef CONFIG_MTK_BLOCK_TAG
 	struct mtk_btag_mictx_iostat_struct *iostat_ptr = &iostat;
+#endif
 	int bw_c = 0, bw_g = 0, bw_mm = 0, bw_total = 0, bw_idx = 0;
 	u32 bw_record = 0, bw_data[bw_record_nums] = {0};
 	int vcore_uv = 0;
@@ -193,7 +196,11 @@ void perf_tracker(u64 wallclock,
 	trace_perf_index_l(
 			K(mm_free),
 			K(mm_available),
+#ifdef CONFIG_MTK_BLOCK_TAG
 			iostat_ptr,
+#else
+			NULL,
+#endif
 			stall
 			);
 }
