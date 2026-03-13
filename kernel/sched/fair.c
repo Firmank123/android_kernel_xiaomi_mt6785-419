@@ -10509,8 +10509,7 @@ more_balance:
 		 * Similarly for migration_misfit which is not related to
 		 * load/util migration, don't pollute nr_balance_failed.
 		 */
-		if (idle != CPU_NEWLY_IDLE &&
-		    env.migration_type != migrate_misfit)
+		if (idle != CPU_NEWLY_IDLE)
 			if (env.src_grp_nr_running > 1)
 				sd->nr_balance_failed++;
 
@@ -10617,8 +10616,7 @@ out_one_pinned:
 	 * the system being busy and requires lb to backoff to let it settle
 	 * down.
 	 */
-	if (env.idle == CPU_NEWLY_IDLE ||
-	    env.migration_type == migrate_misfit)
+	if (env.idle == CPU_NEWLY_IDLE)
 		goto out;
 
 	/* tune up the balancing interval */
@@ -11203,7 +11201,6 @@ static bool _nohz_idle_balance(struct rq *this_rq, unsigned int flags,
 	bool has_blocked_load = false;
 	int this_cpu = this_rq->cpu;
 	int update_next_balance = 0;
-	int this_cpu = this_rq->cpu;
 	int balance_cpu;
 	int ret = false;
 	struct rq *rq;
