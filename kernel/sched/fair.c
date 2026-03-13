@@ -3733,7 +3733,7 @@ static inline unsigned long task_util(struct task_struct *p)
 
 static inline unsigned long task_runnable(struct task_struct *p)
 {
-	return READ_ONCE(p->se.avg.runnable_avg);
+	return READ_ONCE(p->se.avg.runnable_load_avg);
 }
 
 static inline unsigned long _task_util_est(struct task_struct *p)
@@ -3859,7 +3859,7 @@ util_est_dequeue(struct cfs_rq *cfs_rq, struct task_struct *p, bool task_sleep)
 	 * To avoid underestimate of task utilization, skip updates of EWMA if
 	 * we cannot grant that thread got all CPU time it wanted.
 	 */
-	if ((ue.enqueued + UTIL_EST_MARGIN) < task_runnable(p))
+	if ((ue.enqueued + (SCHED_CAPACITY_SCALE / 100)) < task_runnable(p))
 		goto done;
 
 
@@ -3895,17 +3895,26 @@ static inline int task_fits_capacity(struct task_struct *p, long capacity)
 	return capacity * 1024 > uclamp_task_util(p) * capacity_margin;
 }
 
+static inline int task_fits_cpu(struct task_struct *p, int cpu)
+{
+	return task_fits_capacity(p, capacity_of(cpu));
+}
+
 static inline void update_misfit_status(struct task_struct *p, struct rq *rq)
 {
+	int cpu = cpu_of(rq);
+
 	if (!static_branch_unlikely(&sched_asym_cpucapacity))
 		return;
 
-	if (!p || p->nr_cpus_allowed == 1) {
-		rq->misfit_task_load = 0;
-		return;
-	}
+	/*
+	 * Affinity allows us to go somewhere higher?  Or are we on biggest
+	 * available CPU already? Or do we fit into this CPU ?
+	 */
+	if (!p || (p->nr_cpus_allowed == 1) ||
+	    (arch_scale_cpu_capacity(NULL, cpu) == p->max_allowed_capacity) ||
+	    task_fits_cpu(p, cpu)) {
 
-	if (task_fits_capacity(p, capacity_of(cpu_of(rq)))) {
 		rq->misfit_task_load = 0;
 		return;
 	}
@@ -7930,6 +7939,31 @@ static void task_dead_fair(struct task_struct *p)
 {
 	remove_entity_load_avg(&p->se);
 }
+
+/*
+ * Set the max capacity the task is allowed to run at for misfit detection.
+ */
+static void set_task_max_allowed_capacity(struct task_struct *p)
+{
+	p->max_allowed_capacity = arch_scale_cpu_capacity(NULL, cpumask_first(&p->cpus_allowed));
+}
+
+static void set_cpus_allowed_fair(struct task_struct *p, const struct cpumask *new_mask)
+{
+	set_cpus_allowed_common(p, new_mask);
+	set_task_max_allowed_capacity(p);
+}
+
+static int
+balance_fair(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
+{
+	if (rq->nr_running)
+		return 1;
+
+	return idle_balance(rq, rf) != 0;
+}
+#else
+static inline void set_task_max_allowed_capacity(struct task_struct *p) {}
 #endif /* CONFIG_SMP */
 
 static unsigned long wakeup_gran(struct sched_entity *se)
@@ -9288,6 +9322,12 @@ check_cpu_capacity(struct rq *rq, struct sched_domain *sd)
 {
 	return ((rq->cpu_capacity * sd->imbalance_pct) <
 				(rq->cpu_capacity_orig * 100));
+}
+
+/* Check if the rq has a misfit task */
+static inline bool check_misfit_status(struct rq *rq)
+{
+	return rq->misfit_task_load;
 }
 
 /*
@@ -10943,6 +10983,43 @@ static void nohz_balancer_kick(struct rq *rq)
 	}
 
 	rcu_read_lock();
+
+	sd = rcu_dereference(per_cpu(sd_asym_packing, cpu));
+	if (sd) {
+		/*
+		 * When ASYM_PACKING; see if there's a more preferred CPU
+		 * currently idle; in which case, kick the ILB to move tasks
+		 * around.
+		 */
+		for_each_cpu_and(i, sched_domain_span(sd), nohz.idle_cpus_mask) {
+			if (sched_asym_prefer(i, cpu)) {
+				flags = NOHZ_STATS_KICK | NOHZ_BALANCE_KICK;
+				goto unlock;
+			}
+		}
+	}
+
+	sd = rcu_dereference(per_cpu(sd_asym_cpucapacity, cpu));
+	if (sd) {
+		/*
+		 * When ASYM_CPUCAPACITY; see if there's a higher capacity CPU
+		 * to run the misfit task on.
+		 */
+		if (check_misfit_status(rq)) {
+			flags = NOHZ_STATS_KICK | NOHZ_BALANCE_KICK;
+			goto unlock;
+		}
+
+		/*
+		 * For asymmetric systems, we do not want to nicely balance
+		 * cache use, instead we want to embrace asymmetry and only
+		 * ensure tasks have enough CPU capacity.
+		 *
+		 * Skip the LLC logic because it's not relevant in that case.
+		 */
+		goto unlock;
+	}
+
 	sds = rcu_dereference(per_cpu(sd_llc_shared, cpu));
 	if (sds) {
 		/*
@@ -11692,6 +11769,8 @@ static void task_fork_fair(struct task_struct *p)
 	rq_lock(rq, &rf);
 	update_rq_clock(rq);
 
+	set_task_max_allowed_capacity(p);
+
 	cfs_rq = task_cfs_rq(current);
 	curr = cfs_rq->curr;
 	if (curr) {
@@ -11860,6 +11939,8 @@ static void switched_from_fair(struct rq *rq, struct task_struct *p)
 static void switched_to_fair(struct rq *rq, struct task_struct *p)
 {
 	attach_task_cfs_rq(p);
+
+	set_task_max_allowed_capacity(p);
 
 	if (task_on_rq_queued(p)) {
 		/*
@@ -12173,7 +12254,7 @@ const struct sched_class fair_sched_class = {
 	.rq_offline		= rq_offline_fair,
 
 	.task_dead		= task_dead_fair,
-	.set_cpus_allowed	= set_cpus_allowed_common,
+	.set_cpus_allowed	= set_cpus_allowed_fair,
 #endif
 
 	.set_curr_task          = set_curr_task_fair,
