@@ -2558,649 +2558,6 @@ module_param_named(scan_anon_prio, scan_anon_priority, int, 0644);
 
 #ifdef CONFIG_LRU_GEN
 
-/******************************************************************************
- *                    MGLRU-PSI Layered Architecture
- *
- *  Architecture overview:
- *
- *       PSI (raw pressure signal)
- *                │
- *      averaging + debounce
- *                │
- *      pressure classifier ──────┐
- *                │                │
- *      memory safety guard       │
- *                │                │
- *              MGLRU              │
- *                                 │
- *  ┌──────────────────────────────┘
- *  │    Adaptive Aging Controller
- *  │
- *  │  AGING_SPEED = Pressure (urgency)
- *  │             × Refault  (correctness)
- *  │             × Safety   (permission)
- *  │
- *  │   ┌─ Pressure Classifier → base aging speed
- *  │   ├─ Memory Safety Guard → dampener
- *  │   ├─ Refault feedback    → correction
- *  │   ├─ EMA smoothing       → stability
- *  │   └─ Clamp [0.3x, 2.5x] → bounds
- *  │                │
- *  └──────→ MGLRU aging (nr_to_scan scaling)
- *
- *  PSI Gating: prevents premature OOM kills by LMKD when free RAM is
- *  still abundant. PSI signals are only emitted when genuinely under
- *  memory pressure, not during routine MGLRU background reclaim.
- *
- *  Adaptive Aging: makes MGLRU scan speed proportional to actual
- *  pressure, refault accuracy, and available RAM — so the system
- *  ages pages faster when it needs to, and slower when it doesn't.
- ******************************************************************************/
-
-/*
- * Pressure levels used by the classifier.
- * MGLRU_PRESSURE_NONE:     Free RAM plentiful, reclaim is routine
- * MGLRU_PRESSURE_LOW:      Light pressure, reclaim working fine
- * MGLRU_PRESSURE_MODERATE: Noticeable pressure, reclaim struggling a bit
- * MGLRU_PRESSURE_HIGH:     Significant pressure, reclaim having difficulty
- * MGLRU_PRESSURE_CRITICAL: Severe pressure, system in danger of OOM
- */
-enum mglru_pressure_level {
-	MGLRU_PRESSURE_NONE = 0,
-	MGLRU_PRESSURE_LOW,
-	MGLRU_PRESSURE_MODERATE,
-	MGLRU_PRESSURE_HIGH,
-	MGLRU_PRESSURE_CRITICAL,
-};
-
-/* --- Tunables --- */
-
-/*
- * PSI stall threshold: consecutive failed reclaim cycles before PSI fires.
- * Higher = more tolerant, fewer false OOM kills.
- * Range: [2, 10], Default: 6
- */
-int sysctl_mglru_psi_threshold __read_mostly = 6;
-
-/* Master switch for MGLRU-PSI integration. 0=off, 1=on */
-int sysctl_mglru_psi_enabled __read_mostly = 1;
-
-/*
- * Adaptive swappiness when ZRAM fills up.
- * Reduces CPU overhead from compress/decompress.
- * 0 = disabled, 1 = enabled (default)
- */
-int sysctl_mglru_low_swap_opt __read_mostly = 1;
-
-/*
- * Max pages to swap per reclaim cycle.
- * Limits CPU monopolization by compression.
- * Range: [10, 512], Default: 128 (~512KB)
- */
-int sysctl_mglru_max_swap_batch __read_mostly = 128;
-
-/*
- * Memory safety floor in MB.
- * PSI will NOT be signaled while free RAM is above this threshold.
- * This is the key guard that prevents LMKD from killing apps prematurely.
- *
- * When set to 0 (default), dynamic scaling is used:
- *   safety_mb = totalram_mb / 8
- *   4GB device → 512MB floor
- *   6GB device → 768MB floor
- *   8GB device → 1024MB floor
- *
- * When set to a non-zero value, that value is used directly.
- * Range: [0, 1000], Default: 0 (dynamic)
- */
-int sysctl_mglru_psi_safety_mb __read_mostly;
-
-/*
- * Debounce window: number of reclaim cycles over which pressure is averaged.
- * Higher = smoother signal, fewer transient spikes reaching LMKD.
- * Lower = more responsive but noisier.
- * Range: [2, 16], Default: 5
- */
-int sysctl_mglru_psi_debounce __read_mostly = 5;
-
-static inline bool mglru_psi_enabled(void)
-{
-	return sysctl_mglru_psi_enabled && !static_branch_unlikely(&psi_disabled);
-}
-
-/*
- * Dynamic scaling: compute safety floor based on total RAM.
- *
- *   safety_mb = totalram_mb / 8
- *
- * This automatically adapts to every RAM variant:
- *   4GB → 512MB     6GB → 768MB     8GB → 1024MB
- *
- * If the user has set sysctl_mglru_psi_safety_mb to a non-zero value,
- * that explicit override is used instead.
- */
-static inline unsigned long mglru_safety_pages(void)
-{
-	unsigned long safety_mb;
-
-	if (sysctl_mglru_psi_safety_mb > 0) {
-		/* User-specified override */
-		safety_mb = sysctl_mglru_psi_safety_mb;
-	} else {
-		/* Dynamic: totalram / 8 */
-		safety_mb = (totalram_pages >> (20 - PAGE_SHIFT)) / 8;
-		/* Clamp to reasonable bounds: 256MB min, 1536MB max */
-		if (safety_mb < 256)
-			safety_mb = 256;
-		else if (safety_mb > 1536)
-			safety_mb = 1536;
-	}
-
-	return safety_mb * (1024 * 1024 / PAGE_SIZE);
-}
-
-/*
- * Swap pressure ratio: how full is ZRAM/swap?
- * Returns percentage 0-100 of swap space that is USED.
- * 0 = swap empty or no swap configured
- * 100 = swap completely full
- */
-static inline int mglru_swap_usage_pct(void)
-{
-	if (!total_swap_pages)
-		return 0;
-
-	return 100 - (int)div64_u64((u64)get_nr_swap_pages() * 100,
-				   total_swap_pages);
-}
-
-/*
- * Layer 1: Memory Safety Guard (with swap awareness)
- *
- * Returns true if the system is SAFE — PSI must NOT be signaled.
- *
- * Two independent checks, BOTH must pass for the system to be unsafe:
- *
- * A) Free RAM guard:
- *    If free RAM is above the safety floor, system is safe.
- *
- * B) Swap awareness guard:
- *    Even if free RAM is below the floor, if swap is healthy (usage < 70%),
- *    the system can still reclaim into swap without real pressure.
- *    Only when swap is getting full (>= 70%) do we acknowledge real pressure.
- *
- * This prevents the scenario where MGLRU actively pushes pages into ZRAM
- * (making free RAM look low) while ZRAM still has plenty of headroom.
- * LMKD should not kill apps just because MGLRU is doing its job.
- */
-static inline bool mglru_mem_safe(void)
-{
-	unsigned long free = global_node_page_state(NR_FREE_PAGES);
-	unsigned long safety = mglru_safety_pages();
-
-	/* Free RAM above floor → always safe */
-	if (free >= safety)
-		return true;
-
-	/*
-	 * Below the floor, but swap still has room?
-	 * If swap usage < 70%, MGLRU can still push pages to ZRAM
-	 * without real pressure — suppress PSI.
-	 */
-	if (total_swap_pages && mglru_swap_usage_pct() < 70)
-		return true;
-
-	return false;
-}
-
-/*
- * Layer 2: Pressure Classifier with Hysteresis
- *
- * Classifies the current memory situation into a pressure level.
- * Uses the free page count relative to the safety floor, the reclaim
- * priority (how hard the kernel is trying), and a static hysteresis
- * flag to prevent level oscillation at the HIGH boundary.
- *
- * Hysteresis for HIGH:
- *   Enter HIGH when free < safety * 20% (1/5)
- *   Exit  HIGH when free > safety * 15% (above 3/20 of safety, measured
- *         as: free rises back above the lower band)
- *
- * In concrete terms for a 6GB device (safety=768MB):
- *   Enter HIGH: free < 153MB
- *   Exit  HIGH: free > 115MB
- *
- * This 38MB hysteresis band prevents rapid HIGH↔MODERATE flipping that
- * would cause LMKD to see erratic PSI bursts at the boundary.
- *
- * @priority: current scan_control priority (12=light, 0=desperate)
- * @stall_count: number of consecutive unproductive reclaim cycles
- */
-static bool mglru_in_high_pressure __read_mostly;
-
-static enum mglru_pressure_level mglru_classify_pressure(int priority,
-							 int stall_count)
-{
-	unsigned long free = global_node_page_state(NR_FREE_PAGES);
-	unsigned long safety = mglru_safety_pages();
-	unsigned long high_enter = safety / 5;       /* 20% of safety */
-	unsigned long high_exit  = safety * 3 / 20;  /* 15% of safety */
-
-	/* Plenty of free RAM — no pressure at all */
-	if (free >= safety * 2)
-		return MGLRU_PRESSURE_NONE;
-
-	/* Above safety floor — low pressure at most */
-	if (free >= safety)
-		return MGLRU_PRESSURE_LOW;
-
-	/* Below safety floor but not desperate yet */
-	if (free >= safety / 2 && priority > DEF_PRIORITY - 4)
-		return MGLRU_PRESSURE_MODERATE;
-
-	/*
-	 * Hysteresis band for HIGH pressure.
-	 *
-	 * Once we enter HIGH (free drops below 20% of safety),
-	 * we stay in HIGH until free rises above 15% of safety.
-	 * This prevents oscillation at the boundary.
-	 */
-	if (!mglru_in_high_pressure) {
-		/* Not yet in HIGH — only enter if free < 20% threshold */
-		if (free < high_enter) {
-			mglru_in_high_pressure = true;
-		}
-	} else {
-		/* Already in HIGH — only exit if free > 15% threshold */
-		if (free > high_exit && priority > DEF_PRIORITY - 4) {
-			mglru_in_high_pressure = false;
-		}
-	}
-
-	if (mglru_in_high_pressure) {
-		/* Within HIGH band: distinguish HIGH vs CRITICAL by priority */
-		if (free < safety / 10 && priority <= 2)
-			return MGLRU_PRESSURE_CRITICAL;
-		return MGLRU_PRESSURE_HIGH;
-	}
-
-	return MGLRU_PRESSURE_MODERATE;
-}
-
-/*
- * Layer 3: Averaging + Debounce
- *
- * Tracks pressure history and smooths out transient spikes.
- * PSI is only signaled when sustained pressure is detected
- * over `sysctl_mglru_psi_debounce` consecutive cycles.
- *
- * Uses a simple weighted accumulator:
- * - Stall detected → counter increments by 1
- * - Progress made  → counter decays by half (gradual, not instant reset)
- *
- * This prevents a single good cycle from hiding real sustained pressure,
- * and prevents a single bad cycle from triggering premature kills.
- *
- * @stall_count: raw stall cycle counter (in/out, caller-owned)
- * @made_progress: whether the current reclaim cycle made progress
- *
- * Returns: the debounced stall count for threshold comparison
- */
-static inline int mglru_debounce_stall(int *stall_count, bool made_progress)
-{
-	if (!made_progress) {
-		(*stall_count)++;
-	} else {
-		/* Gradual decay instead of hard reset */
-		*stall_count = *stall_count > 1 ? *stall_count / 2 : 0;
-	}
-
-	return *stall_count;
-}
-
-/*
- * Combined decision: Should we signal PSI memstall?
- *
- * This is the top-level function that implements the full layered stack:
- *   1. Check master switch
- *   2. Memory safety guard (is free RAM above the floor?)
- *   3. Pressure classifier (how bad is it really?)
- *   4. Debounce check (is the pressure sustained?)
- *
- * Only returns true when ALL layers agree there's genuine pressure.
- *
- * @priority: current reclaim priority
- * @debounced_stall: output from mglru_debounce_stall()
- */
-static bool mglru_should_signal_psi(int priority, int debounced_stall)
-{
-	enum mglru_pressure_level level;
-
-	if (!mglru_psi_enabled())
-		return false;
-
-	/* Safety guard: NEVER signal PSI if free RAM is above the floor */
-	if (mglru_mem_safe())
-		return false;
-
-	/* Classify actual pressure */
-	level = mglru_classify_pressure(priority, debounced_stall);
-
-	/*
-	 * Only signal PSI for HIGH or CRITICAL pressure,
-	 * AND only if the stall has been sustained long enough.
-	 *
-	 * For CRITICAL: use half threshold (respond faster)
-	 * For HIGH: use full threshold
-	 * Below HIGH: never signal PSI
-	 */
-	if (level == MGLRU_PRESSURE_CRITICAL)
-		return debounced_stall >= (sysctl_mglru_psi_threshold / 2 + 1);
-
-	if (level == MGLRU_PRESSURE_HIGH)
-		return debounced_stall >= sysctl_mglru_psi_threshold;
-
-	return false;
-}
-
-/******************************************************************************
- *                    Adaptive Aging Controller
- *
- *  Connects the Pressure Classifier to MGLRU aging speed.
- *
- *  AGING_SPEED = Pressure (urgency)
- *              × Refault  (correctness)
- *              × Safety   (permission)
- *
- *  Flow:
- *              PSI
- *               │
- *      Pressure Classifier
- *               │
- *       base aging speed
- *               │
- *      Memory Safety Guard
- *      (RAM enough? slow down)
- *               │
- *        Refault feedback
- *      (reclaim correct?)
- *               │
- *          Smoothing
- *               │
- *            Clamp
- *               │
- *         MGLRU aging
- *
- *  All arithmetic uses fixed-point ×10 scale to avoid floating point.
- *  A multiplier of 10 = 1.0x, 5 = 0.5x, 18 = 1.8x, etc.
- ******************************************************************************/
-
-/* Clamp bounds for the final aging multiplier (×10 scale) */
-#define MGLRU_AGING_MIN		3	/* 0.3x — never fully stop aging */
-#define MGLRU_AGING_MAX		25	/* 2.5x — never overshoot too much */
-#define MGLRU_AGING_NORMAL	10	/* 1.0x — baseline */
-
-/*
- * Smoothing state: exponential moving average of the aging multiplier.
- * Prevents abrupt changes when pressure oscillates at level boundaries.
- *
- * Formula: smoothed = (3 * smoothed + new) / 4
- * This gives ~75% weight to history, 25% to the new sample.
- */
-static int mglru_aging_smoothed __read_mostly = MGLRU_AGING_NORMAL;
-
-/*
- * Step 1: Pressure → Base Aging Speed
- *
- * Maps the pressure level to a target aging multiplier (×10 scale).
- * Higher pressure = faster aging to find cold pages more quickly.
- *
- *  Pressure     | Meaning               | Multiplier
- *  -------------|------------------------|----------
- *  NONE         | idle                   | 0.5x (5)
- *  LOW          | light multitasking     | 0.8x (8)
- *  MODERATE     | normal load            | 1.0x (10)
- *  HIGH         | starting to thrash     | 1.3x (13)
- *  CRITICAL     | near OOM               | 2.0x (20)
- *
- *  The gap between HIGH and CRITICAL is intentionally wide (1.3x vs 2.0x)
- *  so the system has a clear "emergency gear" when approaching OOM, rather
- *  than a gradual ramp that may not respond fast enough.
- */
-static int mglru_pressure_to_aging(enum mglru_pressure_level level)
-{
-	switch (level) {
-	case MGLRU_PRESSURE_NONE:
-		return 5;
-	case MGLRU_PRESSURE_LOW:
-		return 8;
-	case MGLRU_PRESSURE_MODERATE:
-		return 10;
-	case MGLRU_PRESSURE_HIGH:
-		return 13;
-	case MGLRU_PRESSURE_CRITICAL:
-		return 20;
-	default:
-		return MGLRU_AGING_NORMAL;
-	}
-}
-
-/*
- * Step 2: Memory Safety Guard → Permission Dampener
- *
- * If free RAM is still plentiful, slow down aging regardless of
- * what the pressure classifier says. This prevents aggressive
- * aging from evicting useful pages when there's no real urgency.
- *
- * Returns a multiplier (×10 scale):
- *   10 = no dampening (free RAM below safety)
- *   7  = light dampening (free RAM above safety)
- *   5  = strong dampening (free RAM well above safety)
- */
-static int mglru_safety_dampener(void)
-{
-	unsigned long free = global_node_page_state(NR_FREE_PAGES);
-	unsigned long safety = mglru_safety_pages();
-
-	/* Free RAM well above safety → strong dampening */
-	if (free >= safety * 2)
-		return 5;
-
-	/* Free RAM above safety → light dampening */
-	if (free >= safety)
-		return 7;
-
-	/* Below safety → no dampening, let pressure drive */
-	return 10;
-}
-
-/*
- * Step 3: Refault Feedback → Correctness Adjustment (MOST IMPORTANT)
- *
- * Measures how effective recent reclaim was by looking at the refault
- * ratio across all tiers for a given lruvec.
- *
- *   refault_rate = total_refaulted / total_evicted (×100 for percentage)
- *
- *  Refault rate | Meaning              | Adjustment
- *  -------------|----------------------|----------
- *  < 10%        | reclaim is accurate  | 1.2x (speed up, we're picking well)
- *  10–30%       | neutral              | 1.0x (no change)
- *  > 30%        | reclaim is wrong     | 0.6x (slow down, wrong pages evicted)
- *
- * Minimum sample guard:
- *  The refault ratio is meaningless with too few data points — a single
- *  refault out of 3 evictions looks like 33% ("terrible!") but is just
- *  noise. We require a minimum number of total evictions before trusting
- *  the ratio. Below that threshold we return neutral (1.0×) so the
- *  pressure and safety factors still drive aging normally.
- *
- *  Threshold: 4 × MIN_LRU_BATCH (typically 4 × 64 = 256 pages).
- *  This covers:
- *   - Early boot: almost no evictions yet → neutral
- *   - Idle device: avg_total decays toward zero → neutral
- *   - Cold cache after app switch: small burst → neutral
- *
- * Returns a multiplier (×10 scale).
- */
-#define MGLRU_REFAULT_MIN_SAMPLE	(4 * MIN_LRU_BATCH)
-
-static int mglru_refault_adjustment(struct lruvec *lruvec)
-{
-	int type, tier;
-	unsigned long total_refaulted = 0;
-	unsigned long total_evicted = 0;
-	unsigned long refault_pct;
-	struct lru_gen_struct *lrugen = &lruvec->lrugen;
-
-	for (type = 0; type < ANON_AND_FILE; type++) {
-		for (tier = 0; tier < MAX_NR_TIERS; tier++) {
-			total_refaulted += READ_ONCE(lrugen->avg_refaulted[type][tier]);
-			total_evicted += READ_ONCE(lrugen->avg_total[type][tier]);
-		}
-	}
-
-	/*
-	 * Minimum sample guard: don't trust the refault ratio until we
-	 * have accumulated enough eviction history. With fewer than
-	 * MGLRU_REFAULT_MIN_SAMPLE pages of data, the ratio is dominated
-	 * by noise — a handful of refaults can swing it wildly.
-	 *
-	 * Return neutral so pressure × safety still work correctly;
-	 * we simply don't apply a correctness adjustment yet.
-	 */
-	if (total_evicted < MGLRU_REFAULT_MIN_SAMPLE)
-		return 10;
-
-	refault_pct = total_refaulted * 100 / total_evicted;
-
-	if (refault_pct < 10)
-		return 12;	/* Reclaim accurate → speed up aging */
-
-	if (refault_pct > 30)
-		return 6;	/* Reclaim inaccurate → slow down aging */
-
-	return 10;		/* Neutral */
-}
-
-/*
- * Step 4+5: Smoothing + Clamp → Final Aging Multiplier
- *
- * Combines all three factors, applies exponential smoothing to prevent
- * oscillation, and clamps the result to safe bounds.
- *
- * @lruvec: the lruvec being aged (for refault data)
- * @priority: current reclaim priority (for pressure classification)
- *
- * Returns: aging multiplier in ×10 scale, clamped to [3, 25].
- *          Caller applies as: nr_to_scan = nr_to_scan * mult / 10
- */
-/*
- * Floor hysteresis flag: prevents jitter when pressure bounces
- * rapidly between HIGH and CRITICAL. Once the floor is activated
- * at a given level, it stays sticky until pressure drops below HIGH.
- *
- *  Without hysteresis:
- *    tick 1: CRITICAL → floor 10 applied
- *    tick 2: HIGH     → floor drops to 8, combined jumps down
- *    tick 3: CRITICAL → floor 10 again, combined jumps up
- *    → jitter in aging speed despite similar real pressure
- *
- *  With hysteresis:
- *    Once CRITICAL floor (10) is activated, it stays active until
- *    pressure drops below HIGH entirely. This smooths the transition.
- */
-static int mglru_floor_active __read_mostly;  /* 0=none, 8=HIGH, 10=CRITICAL */
-
-static int mglru_compute_aging_speed(struct lruvec *lruvec, int priority)
-{
-	int base, safety, refault, combined, floor, smoothed;
-	enum mglru_pressure_level level;
-
-	/* Step 1: Pressure → base aging target */
-	level = mglru_classify_pressure(priority, 0);
-	base = mglru_pressure_to_aging(level);
-
-	/* Step 2: Safety guard dampener */
-	safety = mglru_safety_dampener();
-
-	/* Step 3: Refault correctness */
-	refault = mglru_refault_adjustment(lruvec);
-
-	/*
-	 * Combine: base × safety × refault, all in ×10 scale.
-	 * Example: 13 × 7 × 6 = 546, / 100 = 5 (→0.5x final)
-	 *   HIGH pressure but safe RAM + bad refaults = slow aging
-	 * Example: 20 × 10 × 12 = 2400, / 100 = 24 (→2.4x final)
-	 *   CRITICAL + unsafe + good refaults = fast aging
-	 */
-	combined = base * safety * refault / 100;
-
-	/*
-	 * Pressure floor override with hysteresis:
-	 *
-	 * The safety dampener and refault brake can stack so aggressively
-	 * that even HIGH/CRITICAL pressure produces a combined multiplier
-	 * below 1.0× — making reclaim slower when the system needs it most.
-	 *
-	 * Floor values:
-	 *  - CRITICAL: 1.0× (10) — never slower than baseline
-	 *  - HIGH:     0.8× (8)  — allow only slight slowdown
-	 *  - Others:   no floor
-	 *
-	 * Hysteresis: once a higher floor is activated, it stays sticky
-	 * until pressure drops below HIGH. This prevents the floor itself
-	 * from causing jitter when pressure bounces at the HIGH↔CRITICAL
-	 * boundary (which is common under real workloads).
-	 */
-	floor = 0;
-	if (level >= MGLRU_PRESSURE_CRITICAL)
-		floor = 10;
-	else if (level >= MGLRU_PRESSURE_HIGH)
-		floor = 8;
-
-	/* Hysteresis: keep the higher floor until pressure drops below HIGH */
-	if (floor >= mglru_floor_active)
-		mglru_floor_active = floor;	/* Escalate or maintain */
-	else if (level < MGLRU_PRESSURE_HIGH)
-		mglru_floor_active = 0;		/* Fully de-escalated */
-	/* else: HIGH but was CRITICAL → keep CRITICAL floor (sticky) */
-
-	if (mglru_floor_active && combined < mglru_floor_active)
-		combined = mglru_floor_active;
-
-	/*
-	 * Step 4: Pre-EMA clamp → EMA → final clamp
-	 *
-	 * Why clamp before EMA?
-	 * Without pre-clamp, a single extreme spike (e.g., combined = 40)
-	 * bleeds into the EMA for several ticks even after the spike is
-	 * gone, because (3×old + 40) / 4 carries the outlier forward.
-	 *
-	 * Pipeline: raw → clamp [MIN, MAX] → EMA → clamp [MIN, MAX]
-	 *
-	 * The first clamp rejects outliers at the input.
-	 * The second clamp catches any EMA drift from rounding.
-	 */
-	if (combined < MGLRU_AGING_MIN)
-		combined = MGLRU_AGING_MIN;
-	else if (combined > MGLRU_AGING_MAX)
-		combined = MGLRU_AGING_MAX;
-
-	/* EMA: 75% history / 25% new sample */
-	smoothed = (3 * mglru_aging_smoothed + combined) / 4;
-
-	/* Final clamp (catch rounding drift) */
-	if (smoothed < MGLRU_AGING_MIN)
-		smoothed = MGLRU_AGING_MIN;
-	else if (smoothed > MGLRU_AGING_MAX)
-		smoothed = MGLRU_AGING_MAX;
-
-	mglru_aging_smoothed = smoothed;
-
-	return smoothed;
-}
-
 #ifdef CONFIG_LRU_GEN_ENABLED
 DEFINE_STATIC_KEY_ARRAY_TRUE(lru_gen_caps, NR_LRU_GEN_CAPS);
 #else
@@ -3275,56 +2632,14 @@ static struct lruvec *get_lruvec(struct mem_cgroup *memcg, int nid)
 static int get_swappiness(struct lruvec *lruvec, struct scan_control *sc)
 {
 	struct mem_cgroup *memcg = lruvec_memcg(lruvec);
-	long nr_swap_pages = mem_cgroup_get_nr_swap_pages(memcg);
-	int swappiness;
 
-	/*
-	 * No swap available - return 0 to prevent swap attempts.
-	 * This avoids CPU overhead from failed swap operations.
-	 */
-	if (nr_swap_pages < MIN_LRU_BATCH) {
+	if (mem_cgroup_get_nr_swap_pages(memcg) < MIN_LRU_BATCH) {
 		count_vm_event(current_is_kswapd() ? LRU_KSWAPD_SWAP_FULL:
 						     LRU_DIRECT_SWAP_FULL);
 		return 0;
 	}
 
-	swappiness = mem_cgroup_swappiness(memcg);
-
-	/*
-	 * Adaptive swappiness: Aggressively reduce swap when ZRAM fills up.
-	 * This prevents CPU from being monopolized by compress/decompress
-	 * operations, keeping system responsive for gaming and UI.
-	 *
-	 * Multi-tier reduction based on ZRAM usage:
-	 * - ZRAM >95% full: swappiness → 5 (almost no swap, CPU relief)
-	 * - ZRAM >90% full: swappiness → 10 (minimal swap)
-	 * - ZRAM >80% full: swappiness → 15 (very low swap)
-	 * - ZRAM >60% full: swappiness → 30 (moderate reduction)
-	 * - ZRAM >40% full: swappiness → 50 (light reduction)
-	 *
-	 * This prevents frame drops, UI stutters, and excessive CPU usage
-	 * from compression overhead. Prefers file cache reclaim instead.
-	 */
-	if (sysctl_mglru_low_swap_opt && swappiness > 0) {
-		if (nr_swap_pages < total_swap_pages / 20) {
-			/* ZRAM >95% full - almost stop swapping */
-			swappiness = 5;
-		} else if (nr_swap_pages < total_swap_pages / 10) {
-			/* ZRAM >90% full - minimal swapping */
-			swappiness = 10;
-		} else if (nr_swap_pages < total_swap_pages / 5) {
-			/* ZRAM >80% full - very low swapping */
-			swappiness = 15;
-		} else if (nr_swap_pages < (total_swap_pages * 2) / 5) {
-			/* ZRAM >60% full - moderate reduction */
-			swappiness = min(swappiness, 30);
-		} else if (nr_swap_pages < (total_swap_pages * 3) / 5) {
-			/* ZRAM >40% full - light reduction */
-			swappiness = min(swappiness, 50);
-		}
-	}
-
-	return swappiness;
+	return mem_cgroup_swappiness(memcg);
 }
 
 static int get_nr_gens(struct lruvec *lruvec, int type)
@@ -4567,7 +3882,6 @@ static bool age_lruvec(struct lruvec *lruvec, struct scan_control *sc,
 {
 	bool need_aging;
 	long nr_to_scan;
-	int aging_mult;
 	int swappiness = get_swappiness(lruvec, sc);
 	struct mem_cgroup *memcg = lruvec_memcg(lruvec);
 	enum mem_cgroup_protection prot = mem_cgroup_protected(NULL, memcg);
@@ -4590,20 +3904,6 @@ static bool age_lruvec(struct lruvec *lruvec, struct scan_control *sc,
 		return false;
 
 	nr_to_scan >>= sc->priority;
-
-	/*
-	 * Adaptive aging: scale nr_to_scan by the computed aging multiplier.
-	 *
-	 * The multiplier is derived from:
-	 *   Pressure (urgency) × Safety (permission) × Refault (correctness)
-	 *
-	 * This makes aging faster under real pressure with accurate reclaim,
-	 * and slower when RAM is plentiful or eviction is hitting wrong pages.
-	 *
-	 * Multiplier is in ×10 scale: 10 = 1.0x, 14 = 1.4x, 6 = 0.6x
-	 */
-	aging_mult = mglru_compute_aging_speed(lruvec, sc->priority);
-	nr_to_scan = nr_to_scan * aging_mult / MGLRU_AGING_NORMAL;
 
 	if (!mem_cgroup_online(memcg))
 		nr_to_scan++;
@@ -5141,7 +4441,6 @@ static long get_nr_to_scan(struct lruvec *lruvec, struct scan_control *sc, bool 
 {
 	int priority;
 	long nr_to_scan;
-	int aging_mult;
 	struct mem_cgroup *memcg = lruvec_memcg(lruvec);
 	DEFINE_MAX_SEQ(lruvec);
 	DEFINE_MIN_SEQ(lruvec);
@@ -5150,10 +4449,6 @@ static long get_nr_to_scan(struct lruvec *lruvec, struct scan_control *sc, bool 
 	if (!nr_to_scan)
 		return 0;
 
-	/*
-	 * Skip early PSI signaling here - it's too aggressive.
-	 * We'll signal PSI only in shrink loop when really needed.
-	 */
 
 	if (!mem_cgroup_online(memcg))
 		priority = 0;
@@ -5163,39 +4458,24 @@ static long get_nr_to_scan(struct lruvec *lruvec, struct scan_control *sc, bool 
 		priority = sc->priority;
 
 	nr_to_scan >>= priority;
-
-	/*
-	 * Adaptive aging for direct reclaim path.
-	 * Scale scan target by the pressure × safety × refault multiplier.
-	 */
-	if (nr_to_scan) {
-		aging_mult = mglru_compute_aging_speed(lruvec, priority);
-		nr_to_scan = nr_to_scan * aging_mult / MGLRU_AGING_NORMAL;
-	}
-
 	if (!nr_to_scan)
-		goto out;
+		return 0;
 
 	if (!*need_aging)
-		goto out;
+		return nr_to_scan;
 
 	/* skip the aging path at the default priority */
 	if (priority == DEF_PRIORITY)
-		goto out;
+		return nr_to_scan;
 
 	/* leave the work to lru_gen_age_node() */
-	if (current_is_kswapd()) {
-		nr_to_scan = 0;
-		goto out;
-	}
+	if (current_is_kswapd())
+		return 0;
 
 	if (try_to_inc_max_seq(lruvec, max_seq, sc, can_swap, false))
-		goto out;
+		return nr_to_scan;
 
-	nr_to_scan = min_seq[!can_swap] + MIN_NR_GENS <= max_seq ? nr_to_scan : 0;
-
-out:
-	return nr_to_scan;
+	return min_seq[!can_swap] + MIN_NR_GENS <= max_seq ? nr_to_scan : 0;
 }
 
 static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc)
@@ -5206,11 +4486,6 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 	bool swapped = false;
 	unsigned long reclaimed = sc->nr_reclaimed;
 	struct pglist_data *pgdat = lruvec_pgdat(lruvec);
-	unsigned long psi_flags = 0;
-	bool in_memstall = false;
-	int stall_cycles = 0;
-	int swap_pages_this_cycle = 0;
-	int loop_count = 0;
 
 	blk_start_plug(&plug);
 
@@ -5221,8 +4496,6 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 		int delta;
 		int swappiness;
 		long nr_to_scan;
-		bool made_progress;
-		int debounced;
 
 		if (sc->may_swap)
 			swappiness = get_swappiness(lruvec, sc);
@@ -5231,70 +4504,11 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 		else
 			swappiness = 0;
 
-		/*
-		 * Swap batch limiter: cap swap operations per cycle to
-		 * prevent CPU monopolization by ZRAM compress/decompress.
-		 * Redirect to file reclaim once batch limit is reached.
-		 */
-		if (swappiness > 0 && swap_pages_this_cycle >= sysctl_mglru_max_swap_batch)
-			swappiness = min(swappiness / 4, 25);
-
 		nr_to_scan = get_nr_to_scan(lruvec, sc, swappiness, reclaimed, &need_aging);
 		if (!nr_to_scan)
 			goto done;
 
 		delta = evict_pages(lruvec, sc, swappiness, &swapped);
-
-		/* Track swap volume for batch limiting */
-		if (swapped && delta > 0)
-			swap_pages_this_cycle += delta;
-
-		loop_count++;
-
-		/*
-		 * Consolidated CPU yield: one smart yield per iteration.
-		 * Yield more aggressively when doing heavy swap work,
-		 * but never more than once per loop iteration.
-		 */
-		if (swap_pages_this_cycle >= sysctl_mglru_max_swap_batch / 4 ||
-		    (loop_count & 3) == 0)
-			cond_resched();
-
-		/*
-		 * ── Layered PSI decision ──
-		 *
-		 * Layer 3 (Debounce): Smooth the stall signal.
-		 *   Progress → decay counter gradually
-		 *   Stall    → increment counter
-		 *
-		 * Layer 2 (Classifier) + Layer 1 (Safety Guard):
-		 *   Evaluated inside mglru_should_signal_psi().
-		 *   Won't fire if free RAM is above safety floor.
-		 *
-		 * Only direct reclaim (not kswapd) can trigger PSI,
-		 * because kswapd is background work — it should not
-		 * make LMKD think there's user-facing pressure.
-		 */
-		made_progress = (delta > 0) && !need_aging;
-		debounced = mglru_debounce_stall(&stall_cycles, made_progress);
-
-		if (!current_is_kswapd() &&
-		    mglru_should_signal_psi(sc->priority, debounced)) {
-			if (!in_memstall) {
-				psi_memstall_enter(&psi_flags);
-				in_memstall = true;
-				count_vm_event(PGSCAN_DIRECT_THROTTLE);
-			}
-		} else if (in_memstall && made_progress) {
-			/*
-			 * Leave memstall only when genuinely making progress.
-			 * This prevents rapid enter/leave flickering that
-			 * confuses LMKD's averaging window.
-			 */
-			psi_memstall_leave(&psi_flags);
-			in_memstall = false;
-		}
-
 		if (!delta)
 			goto done;
 
@@ -5304,20 +4518,17 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 		scanned += delta;
 		if (scanned >= nr_to_scan)
 			break;
+
+		cond_resched();
 	}
 
 	if (!need_aging)
 		sc->memcgs_need_aging = false;
 	if (!swapped)
 		sc->memcgs_need_swapping = false;
-
 done:
 	if (current_is_kswapd())
 		current->reclaim_state->mm_walk = NULL;
-
-	/* Clean up PSI state on function exit */
-	if (in_memstall)
-		psi_memstall_leave(&psi_flags);
 
 	blk_finish_plug(&plug);
 }
@@ -7061,26 +6272,7 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int classzone_idx)
 		.may_swap = 1,
 	};
 
-	/*
-	 * Deferred PSI for kswapd: when MGLRU is active, don't signal
-	 * memstall on entry. kswapd is background reclaim — signaling PSI
-	 * here makes LMKD think there's user-facing pressure during routine
-	 * housekeeping. We defer PSI to when priority escalates (actual trouble).
-	 *
-	 * Without MGLRU, use the original unconditional PSI entry.
-	 */
-	{
-		bool kswapd_psi_active = false;
-#ifdef CONFIG_LRU_GEN
-		bool kswapd_defer_psi = lru_gen_enabled();
-#else
-		bool kswapd_defer_psi = false;
-#endif
-	if (!kswapd_defer_psi) {
-		psi_memstall_enter(&pflags);
-		kswapd_psi_active = true;
-	}
-
+	psi_memstall_enter(&pflags);
 	__fs_reclaim_acquire();
 
 	count_vm_event(PAGEOUTRUN);
@@ -7089,20 +6281,6 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int classzone_idx)
 		unsigned long nr_reclaimed = sc.nr_reclaimed;
 		bool raise_priority = true;
 		bool ret;
-
-#ifdef CONFIG_LRU_GEN
-		/*
-		 * Layered PSI for kswapd (MGLRU path): only enter memstall
-		 * when priority is elevated AND free RAM is below safety floor.
-		 * This prevents LMKD from seeing pressure during normal
-		 * background reclaim when RAM is still plentiful.
-		 */
-		if (kswapd_defer_psi && !kswapd_psi_active &&
-		    sc.priority < DEF_PRIORITY - 3 && !mglru_mem_safe()) {
-			psi_memstall_enter(&pflags);
-			kswapd_psi_active = true;
-		}
-#endif
 
 		sc.reclaim_idx = classzone_idx;
 
@@ -7199,9 +6377,7 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int classzone_idx)
 out:
 	snapshot_refaults(NULL, pgdat);
 	__fs_reclaim_release();
-	if (kswapd_psi_active)
-		psi_memstall_leave(&pflags);
-	} /* end deferred PSI scope */
+	psi_memstall_leave(&pflags);
 	/*
 	 * Return the order kswapd stopped reclaiming at as
 	 * prepare_kswapd_sleep() takes it into account. If another caller
