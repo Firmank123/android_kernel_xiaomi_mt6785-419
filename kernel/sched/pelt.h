@@ -55,11 +55,6 @@ static inline u64 rq_clock_pelt(struct rq *rq)
 static inline void _update_idle_rq_clock_pelt(struct rq *rq)
 {
 	rq->clock_pelt = rq_clock_task(rq);
-
-	u64_u32_store(rq->clock_idle, rq_clock(rq));
-	/* Paired with smp_rmb in migrate_se_pelt_lag() */
-	smp_wmb();
-	u64_u32_store(rq->clock_pelt_idle, rq_clock_pelt(rq));
 }
 
 /*
@@ -78,7 +73,7 @@ static inline void update_rq_clock_pelt(struct rq *rq, s64 delta)
 {
 	if (unlikely(is_idle_task(rq->curr))) {
 		/* The rq is idle, we can sync to clock_task */
-		rq->clock_pelt  = rq_clock_task_mult(rq);
+		rq->clock_pelt  = rq_clock_task(rq);
 		return;
 	}
 

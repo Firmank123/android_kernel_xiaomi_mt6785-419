@@ -10185,6 +10185,8 @@ static struct rq *find_busiest_queue(struct lb_env *env,
 
 static int need_active_balance(struct lb_env *env)
 {
+	struct sched_domain *sd = env->sd;
+
 	if (env->idle == CPU_NEWLY_IDLE) {
 
 		/*
@@ -11099,6 +11101,7 @@ static bool _nohz_idle_balance(struct rq *this_rq, unsigned int flags,
 	unsigned long now = jiffies;
 	unsigned long next_balance = now + 60*HZ;
 	bool has_blocked_load = false;
+	int this_cpu = this_rq->cpu;
 	int update_next_balance = 0;
 	int balance_cpu;
 	int ret = false;
