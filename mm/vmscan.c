@@ -2581,16 +2581,12 @@ module_param_named(scan_anon_prio, scan_anon_priority, int, 0644);
 /*
  * Pressure levels used by the classifier.
  * MGLRU_PRESSURE_NONE:     Free RAM plentiful, reclaim is routine
- * MGLRU_PRESSURE_LOW:      Light pressure, reclaim working fine
- * MGLRU_PRESSURE_MODERATE: Noticeable pressure, reclaim struggling a bit
- * MGLRU_PRESSURE_HIGH:     Significant pressure, reclaim having difficulty
+ * MGLRU_PRESSURE_LOW:     Some pressure, reclaim active
  * MGLRU_PRESSURE_CRITICAL: Severe pressure, system in danger of OOM
  */
 enum mglru_pressure_level {
 	MGLRU_PRESSURE_NONE = 0,
 	MGLRU_PRESSURE_LOW,
-	MGLRU_PRESSURE_MODERATE,
-	MGLRU_PRESSURE_HIGH,
 	MGLRU_PRESSURE_CRITICAL,
 };
 
@@ -2599,9 +2595,9 @@ enum mglru_pressure_level {
 /*
  * PSI stall threshold: consecutive failed reclaim cycles before PSI fires.
  * Higher = more tolerant, fewer false OOM kills.
- * Range: [2, 10], Default: 6
+ * Range: [2, 10], Default: 2
  */
-int sysctl_mglru_psi_threshold __read_mostly = 6;
+int sysctl_mglru_psi_threshold __read_mostly = 2;
 
 /* Master switch for MGLRU-PSI integration. 0=off, 1=on */
 int sysctl_mglru_psi_enabled __read_mostly = 1;
@@ -2625,20 +2621,23 @@ int sysctl_mglru_max_swap_batch __read_mostly = 128;
  * PSI will NOT be signaled while free RAM is above this threshold.
  * This is the key guard that prevents LMKD from killing apps prematurely.
  *
- * Example: with 6GB RAM and safety_mb=400, LMKD won't see pressure
- * until free RAM drops below 400MB, even if MGLRU is actively reclaiming.
+ * If set to 0, the threshold is dynamically set to total RAM / 10.
+ * Otherwise, it's the specified value in MB.
  *
- * Range: [50, 1000], Default: 500 (MB)
+ * Example: with 6GB RAM and safety_mb=0, threshold is 600MB.
+ * With safety_mb=400, threshold is 400MB.
+ *
+ * Range: [0, 1000], Default: 0 (dynamic)
  */
-int sysctl_mglru_psi_safety_mb __read_mostly = 500;
+int sysctl_mglru_psi_safety_mb __read_mostly = 0;
 
 /*
  * Debounce window: number of reclaim cycles over which pressure is averaged.
  * Higher = smoother signal, fewer transient spikes reaching LMKD.
  * Lower = more responsive but noisier.
- * Range: [2, 16], Default: 5
+ * Range: [2, 16], Default: 4
  */
-int sysctl_mglru_psi_debounce __read_mostly = 5;
+int sysctl_mglru_psi_debounce __read_mostly = 4;
 
 static inline bool mglru_psi_enabled(void)
 {
@@ -2651,7 +2650,10 @@ static inline bool mglru_psi_enabled(void)
  */
 static inline unsigned long mglru_safety_pages(void)
 {
-	return (unsigned long)sysctl_mglru_psi_safety_mb * (1024 * 1024 / PAGE_SIZE);
+	if (sysctl_mglru_psi_safety_mb > 0)
+    	return (unsigned long)sysctl_mglru_psi_safety_mb << (20 - PAGE_SHIFT);
+	else
+		return vm_total_pages / 16; /* Default to 1/16th of total RAM if not set */
 }
 
 /*
@@ -2688,18 +2690,13 @@ static enum mglru_pressure_level mglru_classify_pressure(int priority,
 		return MGLRU_PRESSURE_NONE;
 
 	/* Above safety floor — low pressure at most */
-	if (free >= safety)
+	if (free >= safety) {
+		if (priority > DEF_PRIORITY - 2)
+			return MGLRU_PRESSURE_CRITICAL;
 		return MGLRU_PRESSURE_LOW;
+	}
 
-	/* Below safety floor but not desperate yet */
-	if (free >= safety / 2 && priority > DEF_PRIORITY - 4)
-		return MGLRU_PRESSURE_MODERATE;
-
-	/* Below half the safety floor, or priority is getting desperate */
-	if (free >= safety / 4 || priority > 2)
-		return MGLRU_PRESSURE_HIGH;
-
-	/* Very low free RAM and high priority — critical */
+	/* Below safety floor — critical pressure */
 	return MGLRU_PRESSURE_CRITICAL;
 }
 
@@ -2763,18 +2760,11 @@ static bool mglru_should_signal_psi(int priority, int debounced_stall)
 	level = mglru_classify_pressure(priority, debounced_stall);
 
 	/*
-	 * Only signal PSI for HIGH or CRITICAL pressure,
+	 * Only signal PSI for CRITICAL pressure,
 	 * AND only if the stall has been sustained long enough.
-	 *
-	 * For CRITICAL: use half threshold (respond faster)
-	 * For HIGH: use full threshold
-	 * Below HIGH: never signal PSI
 	 */
 	if (level == MGLRU_PRESSURE_CRITICAL)
 		return debounced_stall >= (sysctl_mglru_psi_threshold / 2 + 1);
-
-	if (level == MGLRU_PRESSURE_HIGH)
-		return debounced_stall >= sysctl_mglru_psi_threshold;
 
 	return false;
 }
