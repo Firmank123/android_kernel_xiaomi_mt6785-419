@@ -2558,17 +2558,6 @@ module_param_named(scan_anon_prio, scan_anon_priority, int, 0644);
 
 #ifdef CONFIG_LRU_GEN
 
-/*
- * MGLRU-PSI integration tunables
- */
-int sysctl_mglru_psi_threshold __read_mostly = 2;
-int sysctl_mglru_psi_enabled __read_mostly = 1;
-
-static inline bool mglru_psi_enabled(void)
-{
-	return sysctl_mglru_psi_enabled && !static_branch_unlikely(&psi_disabled);
-}
-
 #ifdef CONFIG_LRU_GEN_ENABLED
 DEFINE_STATIC_KEY_ARRAY_TRUE(lru_gen_caps, NR_LRU_GEN_CAPS);
 #else
@@ -4467,7 +4456,7 @@ static long get_nr_to_scan(struct lruvec *lruvec, struct scan_control *sc, bool 
 	 * Aging needed indicates approaching memory pressure.
 	 * Signal PSI earlier than direct reclaim / swap exhaustion.
 	 */
-	if (*need_aging && mglru_psi_enabled()) {
+	if (*need_aging) {
 		psi_memstall_enter(&psi_flags);
 		in_memstall = true;
 		count_vm_event(PGSCAN_DIRECT_THROTTLE);
@@ -4551,9 +4540,9 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 		delta = evict_pages(lruvec, sc, swappiness, &swapped);
 
 		/* Track reclaim effectiveness for PSI */
-		if ((delta == 0 || need_aging) && mglru_psi_enabled()) {
+		if (delta == 0 || need_aging) {
 			stall_cycles++;
-			if (stall_cycles >= sysctl_mglru_psi_threshold && !in_memstall) {
+			if (stall_cycles >= 2 && !in_memstall) {
 				psi_memstall_enter(&psi_flags);
 				in_memstall = true;
 				count_vm_event(PGSCAN_DIRECT_THROTTLE);
