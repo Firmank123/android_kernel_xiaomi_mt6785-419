@@ -2558,225 +2558,15 @@ module_param_named(scan_anon_prio, scan_anon_priority, int, 0644);
 
 #ifdef CONFIG_LRU_GEN
 
-/******************************************************************************
- *                    MGLRU-PSI Layered Architecture
- *
- *  Architecture overview:
- *
- *     PSI (raw pressure signal)
- *               │
- *     averaging + debounce
- *               │
- *     pressure classifier
- *               │
- *     memory safety guard
- *               │
- *             MGLRU
- *
- *  This prevents premature OOM kills by LMKD when free RAM is still
- *  abundant. PSI signals are only emitted when the system is genuinely
- *  under memory pressure, not during routine MGLRU background reclaim.
- ******************************************************************************/
-
 /*
- * Pressure levels used by the classifier.
- * MGLRU_PRESSURE_NONE:     Free RAM plentiful, reclaim is routine
- * MGLRU_PRESSURE_LOW:      Light pressure, reclaim working fine
- * MGLRU_PRESSURE_MODERATE: Noticeable pressure, reclaim struggling a bit
- * MGLRU_PRESSURE_HIGH:     Significant pressure, reclaim having difficulty
- * MGLRU_PRESSURE_CRITICAL: Severe pressure, system in danger of OOM
+ * MGLRU-PSI integration tunables
  */
-enum mglru_pressure_level {
-	MGLRU_PRESSURE_NONE = 0,
-	MGLRU_PRESSURE_LOW,
-	MGLRU_PRESSURE_MODERATE,
-	MGLRU_PRESSURE_HIGH,
-	MGLRU_PRESSURE_CRITICAL,
-};
-
-/* --- Tunables --- */
-
-/*
- * PSI stall threshold: consecutive failed reclaim cycles before PSI fires.
- * Higher = more tolerant, fewer false OOM kills.
- * Range: [2, 10], Default: 6
- */
-int sysctl_mglru_psi_threshold __read_mostly = 6;
-
-/* Master switch for MGLRU-PSI integration. 0=off, 1=on */
+int sysctl_mglru_psi_threshold __read_mostly = 2;
 int sysctl_mglru_psi_enabled __read_mostly = 1;
-
-/*
- * Adaptive swappiness when ZRAM fills up.
- * Reduces CPU overhead from compress/decompress.
- * 0 = disabled, 1 = enabled (default)
- */
-int sysctl_mglru_low_swap_opt __read_mostly = 1;
-
-/*
- * Max pages to swap per reclaim cycle.
- * Limits CPU monopolization by compression.
- * Range: [10, 512], Default: 128 (~512KB)
- */
-int sysctl_mglru_max_swap_batch __read_mostly = 128;
-
-/*
- * Memory safety floor in MB.
- * PSI will NOT be signaled while free RAM is above this threshold.
- * This is the key guard that prevents LMKD from killing apps prematurely.
- *
- * Example: with 6GB RAM and safety_mb=400, LMKD won't see pressure
- * until free RAM drops below 400MB, even if MGLRU is actively reclaiming.
- *
- * Range: [50, 1000], Default: 500 (MB)
- */
-int sysctl_mglru_psi_safety_mb __read_mostly = 500;
-
-/*
- * Debounce window: number of reclaim cycles over which pressure is averaged.
- * Higher = smoother signal, fewer transient spikes reaching LMKD.
- * Lower = more responsive but noisier.
- * Range: [2, 16], Default: 5
- */
-int sysctl_mglru_psi_debounce __read_mostly = 5;
 
 static inline bool mglru_psi_enabled(void)
 {
 	return sysctl_mglru_psi_enabled && !static_branch_unlikely(&psi_disabled);
-}
-
-/*
- * Convert MB to pages at runtime. Avoids hardcoded page counts
- * that break across devices with different PAGE_SIZE.
- */
-static inline unsigned long mglru_safety_pages(void)
-{
-	return (unsigned long)sysctl_mglru_psi_safety_mb * (1024 * 1024 / PAGE_SIZE);
-}
-
-/*
- * Layer 1: Memory Safety Guard
- *
- * Returns true if free RAM is ABOVE the safety floor.
- * When true, PSI must NOT be signaled regardless of reclaim behavior.
- * This is the most important layer — it prevents LMKD from seeing
- * pressure while the system still has plenty of free RAM.
- */
-static inline bool mglru_mem_safe(void)
-{
-	return global_node_page_state(NR_FREE_PAGES) >= mglru_safety_pages();
-}
-
-/*
- * Layer 2: Pressure Classifier
- *
- * Classifies the current memory situation into a pressure level.
- * Uses both the absolute free page count and the reclaim priority
- * (which reflects how hard the kernel is trying to free pages).
- *
- * @priority: current scan_control priority (12=light, 0=desperate)
- * @stall_count: number of consecutive unproductive reclaim cycles
- */
-static enum mglru_pressure_level mglru_classify_pressure(int priority,
-							 int stall_count)
-{
-	unsigned long free = global_node_page_state(NR_FREE_PAGES);
-	unsigned long safety = mglru_safety_pages();
-
-	/* Plenty of free RAM — no pressure at all */
-	if (free >= safety * 2)
-		return MGLRU_PRESSURE_NONE;
-
-	/* Above safety floor — low pressure at most */
-	if (free >= safety)
-		return MGLRU_PRESSURE_LOW;
-
-	/* Below safety floor but not desperate yet */
-	if (free >= safety / 2 && priority > DEF_PRIORITY - 4)
-		return MGLRU_PRESSURE_MODERATE;
-
-	/* Below half the safety floor, or priority is getting desperate */
-	if (free >= safety / 4 || priority > 2)
-		return MGLRU_PRESSURE_HIGH;
-
-	/* Very low free RAM and high priority — critical */
-	return MGLRU_PRESSURE_CRITICAL;
-}
-
-/*
- * Layer 3: Averaging + Debounce
- *
- * Tracks pressure history and smooths out transient spikes.
- * PSI is only signaled when sustained pressure is detected
- * over `sysctl_mglru_psi_debounce` consecutive cycles.
- *
- * Uses a simple weighted accumulator:
- * - Stall detected → counter increments by 1
- * - Progress made  → counter decays by half (gradual, not instant reset)
- *
- * This prevents a single good cycle from hiding real sustained pressure,
- * and prevents a single bad cycle from triggering premature kills.
- *
- * @stall_count: raw stall cycle counter (in/out, caller-owned)
- * @made_progress: whether the current reclaim cycle made progress
- *
- * Returns: the debounced stall count for threshold comparison
- */
-static inline int mglru_debounce_stall(int *stall_count, bool made_progress)
-{
-	if (!made_progress) {
-		(*stall_count)++;
-	} else {
-		/* Gradual decay instead of hard reset */
-		*stall_count = *stall_count > 1 ? *stall_count / 2 : 0;
-	}
-
-	return *stall_count;
-}
-
-/*
- * Combined decision: Should we signal PSI memstall?
- *
- * This is the top-level function that implements the full layered stack:
- *   1. Check master switch
- *   2. Memory safety guard (is free RAM above the floor?)
- *   3. Pressure classifier (how bad is it really?)
- *   4. Debounce check (is the pressure sustained?)
- *
- * Only returns true when ALL layers agree there's genuine pressure.
- *
- * @priority: current reclaim priority
- * @debounced_stall: output from mglru_debounce_stall()
- */
-static bool mglru_should_signal_psi(int priority, int debounced_stall)
-{
-	enum mglru_pressure_level level;
-
-	if (!mglru_psi_enabled())
-		return false;
-
-	/* Safety guard: NEVER signal PSI if free RAM is above the floor */
-	if (mglru_mem_safe())
-		return false;
-
-	/* Classify actual pressure */
-	level = mglru_classify_pressure(priority, debounced_stall);
-
-	/*
-	 * Only signal PSI for HIGH or CRITICAL pressure,
-	 * AND only if the stall has been sustained long enough.
-	 *
-	 * For CRITICAL: use half threshold (respond faster)
-	 * For HIGH: use full threshold
-	 * Below HIGH: never signal PSI
-	 */
-	if (level == MGLRU_PRESSURE_CRITICAL)
-		return debounced_stall >= (sysctl_mglru_psi_threshold / 2 + 1);
-
-	if (level == MGLRU_PRESSURE_HIGH)
-		return debounced_stall >= sysctl_mglru_psi_threshold;
-
-	return false;
 }
 
 #ifdef CONFIG_LRU_GEN_ENABLED
@@ -4731,8 +4521,6 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 	unsigned long psi_flags = 0;
 	bool in_memstall = false;
 	int stall_cycles = 0;
-	int swap_pages_this_cycle = 0;
-	int loop_count = 0;
 
 	blk_start_plug(&plug);
 
@@ -4743,8 +4531,6 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 		int delta;
 		int swappiness;
 		long nr_to_scan;
-		bool made_progress;
-		int debounced;
 
 		if (sc->may_swap)
 			swappiness = get_swappiness(lruvec, sc);
@@ -4753,68 +4539,32 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 		else
 			swappiness = 0;
 
-		/*
-		 * Swap batch limiter: cap swap operations per cycle to
-		 * prevent CPU monopolization by ZRAM compress/decompress.
-		 * Redirect to file reclaim once batch limit is reached.
-		 */
-		if (swappiness > 0 && swap_pages_this_cycle >= sysctl_mglru_max_swap_batch)
-			swappiness = min(swappiness / 4, 25);
-
 		nr_to_scan = get_nr_to_scan(lruvec, sc, swappiness, reclaimed, &need_aging);
 		if (!nr_to_scan)
 			goto done;
 
+		/*
+		 * MGLRU-PSI integration: Track unproductive reclaim cycles.
+		 * Signal PSI after 2 consecutive failures to make progress.
+		 */
+
 		delta = evict_pages(lruvec, sc, swappiness, &swapped);
 
-		/* Track swap volume for batch limiting */
-		if (swapped && delta > 0)
-			swap_pages_this_cycle += delta;
-
-		loop_count++;
-
-		/*
-		 * Consolidated CPU yield: one smart yield per iteration.
-		 * Yield more aggressively when doing heavy swap work,
-		 * but never more than once per loop iteration.
-		 */
-		if (swap_pages_this_cycle >= sysctl_mglru_max_swap_batch / 4 ||
-		    (loop_count & 3) == 0)
-			cond_resched();
-
-		/*
-		 * ── Layered PSI decision ──
-		 *
-		 * Layer 3 (Debounce): Smooth the stall signal.
-		 *   Progress → decay counter gradually
-		 *   Stall    → increment counter
-		 *
-		 * Layer 2 (Classifier) + Layer 1 (Safety Guard):
-		 *   Evaluated inside mglru_should_signal_psi().
-		 *   Won't fire if free RAM is above safety floor.
-		 *
-		 * Only direct reclaim (not kswapd) can trigger PSI,
-		 * because kswapd is background work — it should not
-		 * make LMKD think there's user-facing pressure.
-		 */
-		made_progress = (delta > 0) && !need_aging;
-		debounced = mglru_debounce_stall(&stall_cycles, made_progress);
-
-		if (!current_is_kswapd() &&
-		    mglru_should_signal_psi(sc->priority, debounced)) {
-			if (!in_memstall) {
+		/* Track reclaim effectiveness for PSI */
+		if ((delta == 0 || need_aging) && mglru_psi_enabled()) {
+			stall_cycles++;
+			if (stall_cycles >= sysctl_mglru_psi_threshold && !in_memstall) {
 				psi_memstall_enter(&psi_flags);
 				in_memstall = true;
 				count_vm_event(PGSCAN_DIRECT_THROTTLE);
 			}
-		} else if (in_memstall && made_progress) {
-			/*
-			 * Leave memstall only when genuinely making progress.
-			 * This prevents rapid enter/leave flickering that
-			 * confuses LMKD's averaging window.
-			 */
-			psi_memstall_leave(&psi_flags);
-			in_memstall = false;
+		} else {
+			/* Making progress - reset stall tracking */
+			stall_cycles = 0;
+			if (in_memstall) {
+				psi_memstall_leave(&psi_flags);
+				in_memstall = false;
+			}
 		}
 
 		if (!delta)
@@ -4826,13 +4576,14 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 		scanned += delta;
 		if (scanned >= nr_to_scan)
 			break;
+
+		cond_resched();
 	}
 
 	if (!need_aging)
 		sc->memcgs_need_aging = false;
 	if (!swapped)
 		sc->memcgs_need_swapping = false;
-
 done:
 	if (current_is_kswapd())
 		current->reclaim_state->mm_walk = NULL;
@@ -6583,26 +6334,7 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int classzone_idx)
 		.may_swap = 1,
 	};
 
-	/*
-	 * Deferred PSI for kswapd: when MGLRU is active, don't signal
-	 * memstall on entry. kswapd is background reclaim — signaling PSI
-	 * here makes LMKD think there's user-facing pressure during routine
-	 * housekeeping. We defer PSI to when priority escalates (actual trouble).
-	 *
-	 * Without MGLRU, use the original unconditional PSI entry.
-	 */
-	{
-		bool kswapd_psi_active = false;
-#ifdef CONFIG_LRU_GEN
-		bool kswapd_defer_psi = lru_gen_enabled();
-#else
-		bool kswapd_defer_psi = false;
-#endif
-	if (!kswapd_defer_psi) {
-		psi_memstall_enter(&pflags);
-		kswapd_psi_active = true;
-	}
-
+	psi_memstall_enter(&pflags);
 	__fs_reclaim_acquire();
 
 	count_vm_event(PAGEOUTRUN);
@@ -6611,20 +6343,6 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int classzone_idx)
 		unsigned long nr_reclaimed = sc.nr_reclaimed;
 		bool raise_priority = true;
 		bool ret;
-
-#ifdef CONFIG_LRU_GEN
-		/*
-		 * Layered PSI for kswapd (MGLRU path): only enter memstall
-		 * when priority is elevated AND free RAM is below safety floor.
-		 * This prevents LMKD from seeing pressure during normal
-		 * background reclaim when RAM is still plentiful.
-		 */
-		if (kswapd_defer_psi && !kswapd_psi_active &&
-		    sc.priority < DEF_PRIORITY - 3 && !mglru_mem_safe()) {
-			psi_memstall_enter(&pflags);
-			kswapd_psi_active = true;
-		}
-#endif
 
 		sc.reclaim_idx = classzone_idx;
 
@@ -6721,9 +6439,7 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int classzone_idx)
 out:
 	snapshot_refaults(NULL, pgdat);
 	__fs_reclaim_release();
-	if (kswapd_psi_active)
-		psi_memstall_leave(&pflags);
-	} /* end deferred PSI scope */
+	psi_memstall_leave(&pflags);
 	/*
 	 * Return the order kswapd stopped reclaiming at as
 	 * prepare_kswapd_sleep() takes it into account. If another caller
