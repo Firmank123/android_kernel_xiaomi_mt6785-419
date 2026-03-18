@@ -3974,10 +3974,15 @@ static void lru_gen_age_node(struct pglist_data *pgdat, struct scan_control *sc)
 	 */
 	{
 		unsigned long free_pages = global_zone_page_state(NR_FREE_PAGES);
-		unsigned long aging_guard = totalram_pages / 6; /* ~650MB on 4GB */
+		unsigned long aging_guard = totalram_pages / 8;
+		unsigned long pressure   = global_node_page_state(NR_ACTIVE_ANON);
+		unsigned long threshold  = totalram_pages / 4;
 
-		if (free_pages > aging_guard)
-			return;
+		if (free_pages > aging_guard &&
+    			pressure < threshold &&
+    			sc->priority > DEF_PRIORITY - 2)
+    				return;
+
 	}
 
 	/*
