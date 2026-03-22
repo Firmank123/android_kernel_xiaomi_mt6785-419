@@ -6319,6 +6319,32 @@ static bool kswapd_shrink_node(pg_data_t *pgdat,
 	return sc->nr_scanned >= sc->nr_to_reclaim;
 }
 
+static void kswapd_reclaim_throttle(struct scan_control *sc)
+{
+	unsigned long free_pages = global_zone_page_state(NR_FREE_PAGES);
+	unsigned long total = totalram_pages;
+	unsigned long guard = total / 5;
+
+	/*
+	 * Level 3: Light Load
+	 * High free memory (> 20%). Keep reclaim light.
+	 */
+	if (free_pages > guard) {
+		sc->priority = DEF_PRIORITY;
+		return;
+	}
+
+	/*
+	 * Level 2: Moderate Load
+	 * Moderate free memory (> 10%). Limit aggressiveness.
+	 */
+	if (free_pages > total / 10) {
+		if (sc->priority < DEF_PRIORITY - 2)
+			sc->priority = DEF_PRIORITY - 2;
+		return;
+	}
+}
+
 /*
  * For kswapd, balance_pgdat() will reclaim pages across a node from zones
  * that are eligible for use by the caller until at least one zone is
@@ -6348,20 +6374,7 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int classzone_idx)
 		.may_swap = 1,
 	};
 
-		/*
-	 * Reclaim guard
-	 *
-	 * Stop reclaim early if we still have plenty of free memory.
-	 * This prevents reclaim loops where the kernel keeps reclaiming
-	 * even though memory pressure is already gone.
-	 */
-	{
-		unsigned long free_pages = global_zone_page_state(NR_FREE_PAGES);
-		unsigned long guard = totalram_pages / 5; /* ~800MB on 4GB */
-
-		if (free_pages > guard)
-			return 0;
-	}
+	kswapd_reclaim_throttle(&sc);
 
 	psi_memstall_enter(&pflags);
 	__fs_reclaim_acquire();
