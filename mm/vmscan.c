@@ -5278,10 +5278,18 @@ static void shrink_node_memcg(struct pglist_data *pgdat, struct mem_cgroup *memc
 	unsigned long nr_to_reclaim = sc->nr_to_reclaim;
 
 	/*
-	 * Limit reclaim batch size to avoid massive reclaim bursts
-	 * that can stall the system.
+	 * Limit reclaim batch size to avoid massive reclaim bursts.
+	 * 3-level throttling based on pressure (priority):
+	 * 1. High Pressure: Allow larger bursts (256 pages).
+	 * 2. Moderate Pressure: Standard batch (128 pages).
+	 * 3. Light Pressure: Conservative batch (64 pages).
 	 */
-	nr_to_reclaim = min(nr_to_reclaim, SWAP_CLUSTER_MAX * 4);
+	if (sc->priority < DEF_PRIORITY / 2)
+		nr_to_reclaim = min(nr_to_reclaim, SWAP_CLUSTER_MAX << 3);
+	else if (sc->priority < DEF_PRIORITY - 2)
+		nr_to_reclaim = min(nr_to_reclaim, SWAP_CLUSTER_MAX << 2);
+	else
+		nr_to_reclaim = min(nr_to_reclaim, SWAP_CLUSTER_MAX << 1);
 	struct blk_plug plug;
 	bool scan_adjusted;
 
