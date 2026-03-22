@@ -3957,28 +3957,31 @@ static bool age_lruvec(struct lruvec *lruvec, struct scan_control *sc,
 /* to protect the working set of the last N jiffies */
 static unsigned long lru_gen_min_ttl __read_mostly;
 
-static void lru_gen_aging_throttle(struct pglist_data *pgdat, struct scan_control *sc)
+static void lru_gen_aging_throttle(struct pglist_data *pgdat,
+				   struct scan_control *sc)
 {
 	unsigned long free_pages = global_zone_page_state(NR_FREE_PAGES);
 	unsigned long total = totalram_pages;
-	unsigned long pressure = global_node_page_state(NR_ACTIVE_ANON);
-	unsigned long aging_guard = total / 8;
-	unsigned long threshold = total / 4;
+
+	unsigned long inactive = global_node_page_state(NR_INACTIVE_ANON) +
+				 global_node_page_state(NR_INACTIVE_FILE);
+
+	unsigned long free_ratio = free_pages * 100 / total;
+	unsigned long inactive_ratio = inactive * 100 / total;
 
 	/*
 	 * Level 3: Light Load
-	 * High free memory. Keep aging light.
+	 * Plenty of free memory and reclaimable pages.
 	 */
-	if (free_pages > aging_guard && pressure < threshold) {
+	if (free_ratio > 20 && inactive_ratio > 20) {
 		sc->priority = DEF_PRIORITY;
 		return;
 	}
 
 	/*
 	 * Level 2: Moderate Load
-	 * Moderate free memory. Limit aggressiveness.
 	 */
-	if (free_pages > total / 16) {
+	if (free_ratio > 10) {
 		if (sc->priority < DEF_PRIORITY - 2)
 			sc->priority = DEF_PRIORITY - 2;
 		return;
