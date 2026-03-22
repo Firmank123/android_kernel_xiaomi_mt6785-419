@@ -6341,22 +6341,26 @@ static void kswapd_reclaim_throttle(struct scan_control *sc)
 {
 	unsigned long free_pages = global_zone_page_state(NR_FREE_PAGES);
 	unsigned long total = totalram_pages;
-	unsigned long guard = total / 5;
+
+	unsigned long inactive = global_node_page_state(NR_INACTIVE_ANON) +
+				 global_node_page_state(NR_INACTIVE_FILE);
+
+	unsigned long free_ratio = free_pages * 100 / total;
+	unsigned long inactive_ratio = inactive * 100 / total;
 
 	/*
 	 * Level 3: Light Load
-	 * High free memory (> 20%). Keep reclaim light.
+	 * Plenty of free + reclaimable pages
 	 */
-	if (free_pages > guard) {
+	if (free_ratio > 20 && inactive_ratio > 15) {
 		sc->priority = DEF_PRIORITY;
 		return;
 	}
 
 	/*
 	 * Level 2: Moderate Load
-	 * Moderate free memory (> 10%). Limit aggressiveness.
 	 */
-	if (free_pages > total / 10) {
+	if (free_ratio > 10) {
 		if (sc->priority < DEF_PRIORITY - 2)
 			sc->priority = DEF_PRIORITY - 2;
 		return;
