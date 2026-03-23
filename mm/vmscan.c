@@ -4785,7 +4785,7 @@ static ssize_t store_min_ttl(struct kobject *kobj, struct kobj_attribute *attr,
 }
 
 static struct kobj_attribute lru_gen_min_ttl_attr = __ATTR(
-	min_ttl_ms, 0644, show_min_ttl, store_min_ttl
+	min_ttl_ms, 0444, show_min_ttl, NULL
 );
 
 static ssize_t show_enable(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
@@ -5243,6 +5243,8 @@ static int __init init_lru_gen(void)
 	BUILD_BUG_ON(MIN_NR_GENS + 1 >= MAX_NR_GENS);
 	BUILD_BUG_ON(BIT(LRU_GEN_WIDTH) <= MAX_NR_GENS);
 	BUILD_BUG_ON(sizeof(MM_STAT_CODES) != NR_MM_STATS + 1);
+
+	WRITE_ONCE(lru_gen_min_ttl, msecs_to_jiffies(1300));
 
 	if (sysfs_create_group(mm_kobj, &lru_gen_attr_group))
 		pr_err("lru_gen: failed to create sysfs group\n");
