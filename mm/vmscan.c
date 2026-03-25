@@ -3966,21 +3966,6 @@ static void lru_gen_age_node(struct pglist_data *pgdat, struct scan_control *sc)
 	VM_BUG_ON(!current_is_kswapd());
 
 	/*
-	 * Aging throttle
-	 *
-	 * Prevent aggressive aging when the system still has plenty of free
-	 * memory. This avoids situations where long uptimes cause most pages
-	 * to become "old" and trigger unnecessary reclaim storms.
-	 */
-	{
-		unsigned long free_pages = global_zone_page_state(NR_FREE_PAGES);
-		unsigned long aging_guard = totalram_pages / 6; /* ~650MB on 4GB */
-
-		if (free_pages > aging_guard)
-			return;
-	}
-
-	/*
 	 * To reduce the chance of going into the aging path or swapping, which
 	 * can be costly, optimistically skip them unless their corresponding
 	 * flags were cleared in the eviction path. This improves the overall
@@ -5261,12 +5246,6 @@ static void shrink_node_memcg(struct pglist_data *pgdat, struct mem_cgroup *memc
 	enum lru_list lru;
 	unsigned long nr_reclaimed = 0;
 	unsigned long nr_to_reclaim = sc->nr_to_reclaim;
-
-	/*
-	 * Limit reclaim batch size to avoid massive reclaim bursts
-	 * that can stall the system.
-	 */
-	nr_to_reclaim = min(nr_to_reclaim, SWAP_CLUSTER_MAX * 4);
 	struct blk_plug plug;
 	bool scan_adjusted;
 
@@ -6332,21 +6311,6 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int classzone_idx)
 		.may_unmap = 1,
 		.may_swap = 1,
 	};
-
-		/*
-	 * Reclaim guard
-	 *
-	 * Stop reclaim early if we still have plenty of free memory.
-	 * This prevents reclaim loops where the kernel keeps reclaiming
-	 * even though memory pressure is already gone.
-	 */
-	{
-		unsigned long free_pages = global_zone_page_state(NR_FREE_PAGES);
-		unsigned long guard = totalram_pages / 5; /* ~800MB on 4GB */
-
-		if (free_pages > guard)
-			return 0;
-	}
 
 	psi_memstall_enter(&pflags);
 	__fs_reclaim_acquire();
