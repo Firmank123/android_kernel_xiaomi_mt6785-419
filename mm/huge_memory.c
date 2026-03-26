@@ -58,6 +58,25 @@ unsigned long transparent_hugepage_flags __read_mostly =
 	(1<<TRANSPARENT_HUGEPAGE_DEFRAG_KHUGEPAGED_FLAG)|
 	(1<<TRANSPARENT_HUGEPAGE_USE_ZERO_PAGE_FLAG);
 
+struct list_lru deferred_split_lru;
+
+static enum lru_status deferred_split_isolate(struct list_head *item,
+		struct list_lru_one *lru, spinlock_t *lock, void *cb_arg)
+{
+	struct page *page = list_entry(item, struct page, deferred_list);
+	struct list_head *freeable = cb_arg;
+
+	page = compound_head(page);
+	if (get_page_unless_zero(page)) {
+		list_lru_isolate_move(lru, item, freeable);
+		return LRU_REMOVED;
+	}
+
+	/* We lost race with put_compound_page() */
+	list_lru_isolate(lru, item);
+	return LRU_REMOVED;
+}
+
 static struct shrinker deferred_split_shrinker;
 
 static atomic_t huge_zero_refcount;
@@ -417,6 +436,9 @@ static int __init hugepage_init(void)
 	err = register_shrinker(&huge_zero_page_shrinker);
 	if (err)
 		goto err_hzp_shrinker;
+	err = list_lru_init_memcg(&deferred_split_lru, &deferred_split_shrinker);
+	if (err)
+		goto err_lru;
 	err = register_shrinker(&deferred_split_shrinker);
 	if (err)
 		goto err_split_shrinker;
@@ -439,6 +461,8 @@ static int __init hugepage_init(void)
 err_khugepaged:
 	unregister_shrinker(&deferred_split_shrinker);
 err_split_shrinker:
+	list_lru_destroy(&deferred_split_lru);
+err_lru:
 	unregister_shrinker(&huge_zero_page_shrinker);
 err_hzp_shrinker:
 	khugepaged_destroy();
@@ -2782,15 +2806,12 @@ int split_huge_page_to_list(struct page *page, struct list_head *list)
 	}
 
 	/* Prevent deferred_split_scan() touching ->_refcount */
-	spin_lock(&pgdata->split_queue_lock);
+	list_lru_lock(&deferred_split_lru, page_to_nid(head));
 	if (page_ref_freeze(head, 1 + extra_pins)) {
-		if (!list_empty(page_deferred_list(head))) {
-			pgdata->split_queue_len--;
-			list_del(page_deferred_list(head));
-		}
+		__list_lru_del(&deferred_split_lru, page_to_nid(head), page_deferred_list(head));
 		if (mapping)
-			__dec_node_page_state(page, NR_SHMEM_THPS);
-		spin_unlock(&pgdata->split_queue_lock);
+			__dec_node_page_state(head, NR_SHMEM_THPS);
+		list_lru_unlock(&deferred_split_lru, page_to_nid(head));
 		__split_huge_page(page, list, end, flags);
 		if (PageSwapCache(head)) {
 			swp_entry_t entry = { .val = page_private(head) };
@@ -2799,13 +2820,13 @@ int split_huge_page_to_list(struct page *page, struct list_head *list)
 		} else
 			ret = 0;
 	} else {
-		spin_unlock(&pgdata->split_queue_lock);
+		list_lru_unlock(&deferred_split_lru, page_to_nid(head));
 fail:
 		if (mapping)
 			xa_unlock(&mapping->i_pages);
 		spin_unlock_irqrestore(zone_lru_lock(page_zone(head)), flags);
 		remap_page(head);
-		ret = -EBUSY;
+		ret = -EAGAIN;
 	}
 
 out_unlock:
@@ -2822,88 +2843,55 @@ out:
 
 void free_transhuge_page(struct page *page)
 {
-	struct pglist_data *pgdata = NODE_DATA(page_to_nid(page));
-	unsigned long flags;
-
-	spin_lock_irqsave(&pgdata->split_queue_lock, flags);
-	if (!list_empty(page_deferred_list(page))) {
-		pgdata->split_queue_len--;
-		list_del(page_deferred_list(page));
-	}
-	spin_unlock_irqrestore(&pgdata->split_queue_lock, flags);
+	list_lru_del_page(&deferred_split_lru, page, page_deferred_list(page));
 	free_compound_page(page);
 }
 
 void deferred_split_huge_page(struct page *page)
 {
-	struct pglist_data *pgdata = NODE_DATA(page_to_nid(page));
-	unsigned long flags;
-
 	VM_BUG_ON_PAGE(!PageTransHuge(page), page);
 
-	spin_lock_irqsave(&pgdata->split_queue_lock, flags);
-	if (list_empty(page_deferred_list(page))) {
+	if (list_lru_add_page(&deferred_split_lru, page, page_deferred_list(page)))
 		count_vm_event(THP_DEFERRED_SPLIT_PAGE);
-		list_add_tail(page_deferred_list(page), &pgdata->split_queue);
-		pgdata->split_queue_len++;
-	}
-	spin_unlock_irqrestore(&pgdata->split_queue_lock, flags);
 }
 
 static unsigned long deferred_split_count(struct shrinker *shrink,
 		struct shrink_control *sc)
 {
-	struct pglist_data *pgdata = NODE_DATA(sc->nid);
-	return READ_ONCE(pgdata->split_queue_len);
+	return list_lru_shrink_count(&deferred_split_lru, sc);
 }
 
 static unsigned long deferred_split_scan(struct shrinker *shrink,
 		struct shrink_control *sc)
 {
-	struct pglist_data *pgdata = NODE_DATA(sc->nid);
-	unsigned long flags;
-	LIST_HEAD(list), *pos, *next;
-	struct page *page;
+	LIST_HEAD(list);
+	struct page *page, *next;
 	int split = 0;
+	unsigned long isolated;
 
-	spin_lock_irqsave(&pgdata->split_queue_lock, flags);
-	/* Take pin on all head pages to avoid freeing them under us */
-	list_for_each_safe(pos, next, &pgdata->split_queue) {
-		page = list_entry((void *)pos, struct page, mapping);
-		page = compound_head(page);
-		if (get_page_unless_zero(page)) {
-			list_move(page_deferred_list(page), &list);
-		} else {
-			/* We lost race with put_compound_page() */
-			list_del_init(page_deferred_list(page));
-			pgdata->split_queue_len--;
-		}
-		if (!--sc->nr_to_scan)
-			break;
-	}
-	spin_unlock_irqrestore(&pgdata->split_queue_lock, flags);
+	isolated = list_lru_shrink_walk_irq(&deferred_split_lru, sc,
+					    deferred_split_isolate, &list);
 
-	list_for_each_safe(pos, next, &list) {
-		page = list_entry((void *)pos, struct page, mapping);
-		if (!trylock_page(page))
+	list_for_each_entry_safe(page, next, &list, deferred_list) {
+		struct page *head = compound_head(page);
+		if (!trylock_page(head))
 			goto next;
 		/* split_huge_page() removes page from list on success */
-		if (!split_huge_page(page))
+		if (!split_huge_page(head))
 			split++;
-		unlock_page(page);
+		unlock_page(head);
 next:
-		put_page(page);
+		put_page(head);
 	}
 
-	spin_lock_irqsave(&pgdata->split_queue_lock, flags);
-	list_splice_tail(&list, &pgdata->split_queue);
-	spin_unlock_irqrestore(&pgdata->split_queue_lock, flags);
+	/* Add back those that failed to split */
+	list_for_each_entry_safe(page, next, &list, deferred_list) {
+		struct page *head = compound_head(page);
+		list_lru_add_page(&deferred_split_lru, head, &page->deferred_list);
+		put_page(head);
+	}
 
-	/*
-	 * Stop shrinker if we didn't split any page, but the queue is empty.
-	 * This can happen if pages were freed under us.
-	 */
-	if (!split && list_empty(&pgdata->split_queue))
+	if (!split && !isolated)
 		return SHRINK_STOP;
 	return split;
 }
