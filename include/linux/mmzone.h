@@ -933,6 +933,12 @@ typedef struct pglist_data {
 	unsigned long static_init_pgcnt;
 #endif /* CONFIG_DEFERRED_STRUCT_PAGE_INIT */
 
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+	spinlock_t split_queue_lock;
+	struct list_head split_queue;
+	unsigned long split_queue_len;
+#endif
+
 	/* Fields commonly accessed by the page reclaim scanner */
 	struct lruvec		lruvec;
 

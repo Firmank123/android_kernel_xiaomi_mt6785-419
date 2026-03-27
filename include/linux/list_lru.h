@@ -89,10 +89,6 @@ void memcg_drain_all_list_lrus(int src_idx, struct mem_cgroup *dst_memcg);
  * Return value: true if the list was updated, false otherwise
  */
 bool list_lru_add(struct list_lru *lru, struct list_head *item);
-bool list_lru_add_page(struct list_lru *lru, struct page *page, struct list_head *item);
-
-bool __list_lru_add(struct list_lru *lru, int nid, struct mem_cgroup *memcg, struct list_head *item);
-bool __list_lru_del(struct list_lru *lru, int nid, struct list_head *item);
 
 /**
  * list_lru_del: delete an element to the lru list
@@ -106,13 +102,6 @@ bool __list_lru_del(struct list_lru *lru, int nid, struct list_head *item);
  * Return value: true if the list was updated, false otherwise
  */
 bool list_lru_del(struct list_lru *lru, struct list_head *item);
-bool list_lru_del_page(struct list_lru *lru, struct page *page, struct list_head *item);
-
-void list_lru_lock(struct list_lru *lru, int nid);
-void list_lru_unlock(struct list_lru *lru, int nid);
-void list_lru_lock_irqsave(struct list_lru *lru, int nid, unsigned long *flags);
-void list_lru_unlock_irqrestore(struct list_lru *lru, int nid, unsigned long *flags);
-
 
 /**
  * list_lru_count_one: return the number of objects currently held by @lru
