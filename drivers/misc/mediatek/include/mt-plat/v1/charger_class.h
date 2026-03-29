@@ -135,7 +135,6 @@ struct charger_ops {
 
 	/* charger type detection */
 	int (*enable_chg_type_det)(struct charger_device *dev, bool en);
-	int (*rerun_apsd)(struct charger_device *dev, bool en);
 
 	/* HVDCP type detection */
 	int (*get_hvdcp_type)(struct charger_device *dev, u32 *type);
@@ -272,8 +271,6 @@ extern int charger_dev_enable_hvdcp_det(
 extern int charger_dev_check_hv_charging(
 	struct charger_device *charger_dev);
 extern int charger_dev_enable_chg_type_det(
-	struct charger_device *charger_dev, bool en);
-extern int charger_dev_rerun_apsd(
 	struct charger_device *charger_dev, bool en);
 extern int charger_dev_enable_otg(
 	struct charger_device *charger_dev, bool en);
