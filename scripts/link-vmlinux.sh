@@ -1,4 +1,5 @@
 #!/bin/sh
+if [ "$CONFIG_LTO_CLANG" = "y" ] || [ "$CONFIG_LTO_GCC" = "y" ]; then CONFIG_LTO_ANY=y; fi
 # SPDX-License-Identifier: GPL-2.0
 #
 # link vmlinux
@@ -69,12 +70,12 @@ archive_builtin()
 	fi
 }
 
-# If CONFIG_LTO_CLANG is selected, generate a linker script to ensure correct
+# If CONFIG_LTO_ANY is selected, generate a linker script to ensure correct
 # ordering of initcalls, and with CONFIG_MODVERSIONS also enabled, collect the
 # previously generated symbol versions into the same script.
 lto_lds()
 {
-	if [ -z "${CONFIG_LTO_CLANG}" ]; then
+	if [ -z "${CONFIG_LTO_ANY}" ]; then
 		return
 	fi
 
@@ -108,7 +109,7 @@ modpost_link()
 		${KBUILD_VMLINUX_LIBS}				\
 		--end-group"
 
-	if [ -n "${CONFIG_LTO_CLANG}" ]; then
+	if [ -n "${CONFIG_LTO_ANY}" ]; then
 		# This might take a while, so indicate that we're doing
 		# an LTO link
 		info LTO vmlinux.o
@@ -117,11 +118,11 @@ modpost_link()
 	${LD} ${KBUILD_LDFLAGS} -r -o ${1} $(lto_lds) ${objects}
 }
 
-# If CONFIG_LTO_CLANG is selected, we postpone running recordmcount until
+# If CONFIG_LTO_ANY is selected, we postpone running recordmcount until
 # we have compiled LLVM IR to an object file.
 recordmcount()
 {
-	if [ -z "${CONFIG_LTO_CLANG}" ]; then
+	if [ -z "${CONFIG_LTO_ANY}" ]; then
 		return
 	fi
 
@@ -139,7 +140,7 @@ vmlinux_link()
 	local objects
 
 	if [ "${SRCARCH}" != "um" ]; then
-		if [ -z "${CONFIG_LTO_CLANG}" ]; then
+		if [ -z "${CONFIG_LTO_ANY}" ]; then
 			objects="--whole-archive		\
 				built-in.a			\
 				--no-whole-archive		\
@@ -312,7 +313,7 @@ modpost_link vmlinux.o
 # modpost vmlinux.o to check for section mismatches
 ${MAKE} -f "${srctree}/scripts/Makefile.modpost" vmlinux.o
 
-if [ -n "${CONFIG_LTO_CLANG}" ]; then
+if [ -n "${CONFIG_LTO_ANY}" ]; then
 	# Call recordmcount if needed
 	recordmcount vmlinux.o
 fi
