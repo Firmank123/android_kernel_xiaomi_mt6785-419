@@ -635,7 +635,7 @@ static int vow_service_GetParameter(unsigned long arg)
 	}
 	if (vow_info_ap[3] > VOW_MODEL_SIZE ||
 	    vow_info_ap[3] < VOW_MODEL_SIZE_THRES) {
-		VOWDRV_DEBUG("vow Modle Size is incorrect %d\n",
+		VOWDRV_DEBUG("vow Modle Size is incorrect %lu\n",
 			     vow_info_ap[3]);
 		return -EFAULT;
 	}
@@ -643,13 +643,13 @@ static int vow_service_GetParameter(unsigned long arg)
 	memcpy(vowserv.vow_info_apuser, vow_info_ap,
 	       sizeof(vow_info_ap));
 	VOWDRV_DEBUG(
-	"vow get parameter: id %lu, keyword %lu, mdl_ptr 0x%x, mdl_sz %lu\n",
+	"vow get parameter: id %lu, keyword %lu, mdl_ptr 0x%lx, mdl_sz %lu\n",
 		     vowserv.vow_info_apuser[0],
 		     vowserv.vow_info_apuser[1],
 		     vowserv.vow_info_apuser[2],
 		     vowserv.vow_info_apuser[3]);
 	VOWDRV_DEBUG(
-	"vow get parameter: return size addr 0x%x, uuid %d, data 0x%x\n",
+	"vow get parameter: return size addr 0x%lx, uuid %lu, data 0x%lx\n",
 		     vowserv.vow_info_apuser[4],
 		     vowserv.vow_info_apuser[5],
 		     vowserv.vow_info_apuser[6]);
@@ -1774,7 +1774,7 @@ static int vow_pcm_dump_kthread(void *data)
 
 			out_buf = vowserv.interleave_pcmdata_ptr;
 			if (size <= 0)
-				VOWDRV_DEBUG("[VOW]dump size error %d\n");
+				VOWDRV_DEBUG("[VOW]dump size error %d\n", size);
 			while (size > 0) {
 				if (file_bargein_pcm_input_open &&
 				    !IS_ERR(file_bargein_pcm_input)) {
@@ -1802,7 +1802,7 @@ static int vow_pcm_dump_kthread(void *data)
 				   (bargein_resv_dram.vir_addr
 				   + dump_package->mic_offset);
 			if (size <= 0)
-				VOWDRV_DEBUG("[VOW]dump size error %d\n");
+				VOWDRV_DEBUG("[VOW]dump size error %d\n", size);
 			while (size > 0) {
 				if (file_bargein_pcm_input_open &&
 				    !IS_ERR(file_bargein_pcm_input)) {
@@ -1830,7 +1830,7 @@ static int vow_pcm_dump_kthread(void *data)
 				   + dump_package->echo_offset);
 			vowserv.bargein_dump_cnt2++;
 			if (size <= 0)
-				VOWDRV_DEBUG("[VOW]dump size error %d\n");
+				VOWDRV_DEBUG("[VOW]dump size error %d\n", size);
 			while (size > 0) {
 				if (file_bargein_echo_ref_open &&
 				    !IS_ERR(file_bargein_echo_ref)) {
@@ -1893,7 +1893,7 @@ static int vow_pcm_dump_kthread(void *data)
 
 			out_buf = vowserv.interleave_pcmdata_ptr;
 			if (size <= 0)
-				VOWDRV_DEBUG("[VOW]dump size error %d\n");
+				VOWDRV_DEBUG("[VOW]dump size error %d\n", size);
 			while (size > 0) {
 				if (file_recog_data_open &&
 				    !IS_ERR(file_recog_data)) {
@@ -1920,7 +1920,7 @@ static int vow_pcm_dump_kthread(void *data)
 				   (recog_resv_dram.vir_addr
 				   + dump_package->recog_data_offset);
 			if (size <= 0)
-				VOWDRV_DEBUG("[VOW]dump size error %d\n");
+				VOWDRV_DEBUG("[VOW]dump size error %d\n", size);
 			while (size > 0) {
 				if (file_recog_data_open &&
 				    !IS_ERR(file_recog_data)) {

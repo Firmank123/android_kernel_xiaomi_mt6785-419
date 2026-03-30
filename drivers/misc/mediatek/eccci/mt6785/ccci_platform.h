@@ -18,7 +18,7 @@ struct  ccci_plat_val {
 	void __iomem *md_plat_info;
 };
 
-static struct ccci_plat_val md_cd_plat_val_ptr;
+static struct ccci_plat_val md_cd_plat_val_ptr __maybe_unused;
 #define ccci_write32(b, a, v)           mt_reg_sync_writel(v, (b)+(a))
 #define ccci_write16(b, a, v)           mt_reg_sync_writew(v, (b)+(a))
 #define ccci_write8(b, a, v)            mt_reg_sync_writeb(v, (b)+(a))

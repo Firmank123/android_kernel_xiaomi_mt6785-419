@@ -3485,7 +3485,7 @@ mtk_cfg80211_testmode_get_link_detection(IN struct wiphy
 
 	kalMemZero(&rStatistics, sizeof(rStatistics));
 	kalMemZero(prBugReport, sizeof(struct EVENT_BUG_REPORT));
-	kalMemZero(arBugReport, sizeof(struct EVENT_BUG_REPORT));
+	kalMemZero(arBugReport, sizeof(arBugReport));
 
 	rStatus = kalIoctl(prGlueInfo,
 			   wlanoidQueryStatistics,

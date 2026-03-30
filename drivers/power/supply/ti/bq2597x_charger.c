@@ -2298,7 +2298,7 @@ static int bq2597x_psy_register(struct bq2597x *bq)
 	bq->fc2_psy = devm_power_supply_register(bq->dev,
 			&bq->psy_desc, &bq->psy_cfg);
 	if (IS_ERR(bq->fc2_psy)) {
-		bq_err("failed to register fc2_psy:%d\n",
+		bq_err("failed to register fc2_psy:%ld\n",
 				PTR_ERR(bq->fc2_psy));
 		return PTR_ERR(bq->fc2_psy);
 	}

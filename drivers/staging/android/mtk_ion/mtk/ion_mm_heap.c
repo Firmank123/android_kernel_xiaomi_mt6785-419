@@ -518,7 +518,7 @@ void ion_mm_heap_free_buffer_info(struct ion_buffer *buffer)
 
 	for (domain_idx = 0;
 		domain_idx < DOMAIN_NUM; domain_idx++) {
-		IONDBG("mva[%d]:0x%x -- 0x%x,", domain_idx,
+		IONDBG("mva[%d]:0x%lx -- 0x%lx,", domain_idx,
 		       buffer_info->MVA[domain_idx],
 		       buffer_info->FIXED_MVA[domain_idx]);
 		if (buffer_info->MVA[domain_idx] == 0 &&
@@ -892,8 +892,8 @@ static int ion_mm_heap_phys(struct ion_heap *heap, struct ion_buffer *buffer,
 				       ret, sg_phys(buffer->sg_table->sgl),
 				       sg_phys(buffer_info->table_orig->sgl));
 #else
-				IONMSG("OUT OF RANGE(%d) pa=0x%lx\n",
-				       ret, sg_phys(buffer->sg_table->sgl));
+				IONMSG("OUT OF RANGE(%d) pa=0x%llx\n",
+				       ret, (unsigned long long)sg_phys(buffer->sg_table->sgl));
 #endif
 				ion_buffer_dump(buffer, NULL);
 				ret = -EDOM;
@@ -1145,7 +1145,7 @@ static int __do_dump_share_fd(const void *data, struct file *file,
 			 block_nr[0]);
 #elif (DOMAIN_NUM == 2)
 		ION_DUMP(s,
-			 "0x%p %9d %16s %5d %5d %16s %4d 0x%8x(0x%8x) %8d 0x%8x(0x%8x) %8d\n",
+			 "0x%p %9d %16s %5d %5d %16s %4d 0x%8lx(0x%8lx) %8d 0x%8lx(0x%8lx) %8d\n",
 			 buffer, pid,
 			 buffer->alloc_dbg,
 			 p->pid, p->tgid,
@@ -1156,7 +1156,7 @@ static int __do_dump_share_fd(const void *data, struct file *file,
 			 block_nr[1]);
 #elif (DOMAIN_NUM == 4)
 		ION_DUMP(s,
-			 "0x%p %9d %16s %5d %5d %16s %4d %d:(0x%8x+%8d) %d:(0x%8x+%8d) %d:(0x%8x+%8d) %d:(0x%8x+%8d)\n",
+			 "0x%p %9d %16s %5d %5d %16s %4d %d:(0x%8lx+%8d) %d:(0x%8lx+%8d) %d:(0x%8lx+%8d) %d:(0x%8lx+%8d)\n",
 			 buffer, pid,
 			 buffer->alloc_dbg,
 			 p->pid, p->tgid,

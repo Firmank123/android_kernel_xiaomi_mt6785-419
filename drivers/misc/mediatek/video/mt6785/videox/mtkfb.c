@@ -2517,11 +2517,7 @@ static ssize_t fb_lcd_name(struct device *dev,
 {
    ssize_t ret = 0;
 	if(islcmconnected){
-		if(mtkfb_lcm_name != NULL){
-			sprintf(buf, "%s panel\n", mtkfb_lcm_name);
-		}else{
-			sprintf(buf, "Unknown panel!\n");
-		}
+		sprintf(buf, "%s panel\n", mtkfb_lcm_name);
 	}else{
 			sprintf(buf, "no panel connected!\n");
 	}
@@ -2574,7 +2570,7 @@ static int msm_product_name_create_sysfs(void)
 {
 	int ret;
 	msm_product_name = kobject_create_and_add("android_product",NULL);
-	pr_debug("%s: g_product_id =%s, msm_product_name=%s\n", __func__, g_product_id, msm_product_name);
+	pr_debug("%s: g_product_id =%s, msm_product_name=%p\n", __func__, g_product_id, msm_product_name);
 
 	if (msm_product_name == NULL) {
 		pr_err("%s: failed \n", __func__);

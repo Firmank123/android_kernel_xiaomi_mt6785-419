@@ -25,7 +25,7 @@
  * DEBUG
  ******************************************************************************/
 #define SEC_DEBUG                   (0)
-#define SMSG
+#define SMSG(fmt, args...)          pr_info(fmt, ##args)
 #define DMSG
 #if SEC_DEBUG
 #else

@@ -43,7 +43,7 @@
 #define BT_LOG_ERR              1
 #define RAW_MAX_BYTES           30
 
-static uint8_t raw_buf[RAW_MAX_BYTES * 5 + 10];
+static uint8_t raw_buf[RAW_MAX_BYTES * 5 + 10] __maybe_unused;
 extern UINT32 gBtDbgLevel;
 
 #define BT_LOG_PRT_DBG(fmt, arg...)	\
@@ -61,9 +61,9 @@ extern UINT32 gBtDbgLevel;
 			do {	\
 				if (gBtDbgLevel >= BT_LOG_DBG) { \
 					int cnt_ = 0;	\
-					int len_ = (l <= RAW_MAX_BYTES ? l : RAW_MAX_BYTES);	\
+					size_t len_ = (l <= RAW_MAX_BYTES ? l : RAW_MAX_BYTES);	\
 					const unsigned char *ptr = p;	\
-					for (cnt_ = 0; cnt_ < len_; ++cnt_) {	\
+					for (cnt_ = 0; cnt_ < (int)len_; ++cnt_) {	\
 						if (snprintf(raw_buf+5*cnt_, 6, "0x%02X ", ptr[cnt_]) < 0) {	\
 							pr_info("snprintf error\n");	\
 							break;	\

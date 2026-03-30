@@ -431,7 +431,7 @@ static int mt_charger_set_property(struct power_supply *psy,
 	cti = mtk_chg->cti;
 	power_supply_get_property(usb_psy, POWER_SUPPLY_PROP_PD_VERIFY_IN_PROCESS, &pval);
 	if (pval.intval == 1) {
-		pr_info("pd verifing, don't switch data role\n", __func__);
+		pr_info("%s: pd verifing, don't switch data role\n", __func__);
 	} else if ((cti != NULL) && !cti->ignore_usb) {
 		/* usb */
 		if ((mtk_chg->chg_type == STANDARD_HOST) ||

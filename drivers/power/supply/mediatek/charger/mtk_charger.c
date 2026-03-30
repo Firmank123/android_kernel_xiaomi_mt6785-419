@@ -3146,7 +3146,7 @@ static int charger_routine_thread(void *arg)
 		}
 #endif
 		if (is_charger_on == true)
-		pr_err("Ylt_1111 xx=%s,yy=%d",is_charger_on,sizeof(is_charger_on));
+			pr_err("Ylt_1111 xx=%d,yy=%zu", is_charger_on, sizeof(is_charger_on));
 
 		if (info->charger_thread_polling == true)
 			mtk_charger_start_timer(info);

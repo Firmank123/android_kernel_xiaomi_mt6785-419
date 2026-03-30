@@ -483,7 +483,7 @@ int panel_disp_backlight_send_lock(unsigned int level)
 		backlight_set.payload[0] = 0x00;
 		do_lcm_vdo_lp_brief_write_without_lock(&backlight_set,1);
 
-		pr_debug("[LCM]Normal6_backlight: level = %d lcd_bl_en = %d\n",level);
+		pr_debug("[LCM]Normal6_backlight: level = %d\n",level);
 	}
 	vfree(backlight_set.payload);
 	return 0;

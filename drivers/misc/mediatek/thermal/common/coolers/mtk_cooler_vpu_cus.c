@@ -56,16 +56,12 @@ static int mtk_cl_vpu_get_max_state
 static int mtk_cl_vpu_set_cur_state
 (struct thermal_cooling_device *cdev, unsigned long state)
 {
-	if (g_vpu_opp_table != NULL) {
-		if (state >= 0 && state < VPU_OPP_NUM)
-			g_vpu_level = state;
-		if (g_vpu_level != 0)
-			vpu_thermal_en_throttle_cb(0xff, g_vpu_level);
-		else
-			vpu_thermal_dis_throttle_cb();
-	} else
-		mtk_cooler_vpu_dprintk(
-			"%s: vpu_power table = NULL\n", __func__);
+	if (state >= 0 && state < VPU_OPP_NUM)
+		g_vpu_level = state;
+	if (g_vpu_level != 0)
+		vpu_thermal_en_throttle_cb(0xff, g_vpu_level);
+	else
+		vpu_thermal_dis_throttle_cb();
 
 	return 0;
 }

@@ -2357,7 +2357,7 @@ static void DSI_DPHY_clk_setting(enum DISP_MODULE_ENUM module,
 					 FLD_RG_DSI_PLL_SDM_SSC_DELTA1,
 					 pdelta1);
 			DISPINFO(
-				"%S,PLL config:data_rate=%d,pcw_ratio=%d, delta1=%d,pdelta1=0x%x\n",
+				"%s,PLL config:data_rate=%d,pcw_ratio=%d, delta1=%d,pdelta1=0x%x\n",
 				__func__, data_Rate, pcw_ratio, delta1, pdelta1);
 		}
 	}
@@ -5472,7 +5472,7 @@ long  lcm_mipi_reg_write(char *buf, unsigned long  count)
 		goto exit;
 	} else {
 		lcm_mipi_read_write.lcm_setting_table.count = (unsigned char)packet_count;
-		memcpy(lcm_mipi_read_write.lcm_setting_table.para_list, "",64);
+		memset(lcm_mipi_read_write.lcm_setting_table.para_list, 0, 64);
 		if(count > 11)
 		{
 			data = kzalloc(count - 9, GFP_KERNEL);

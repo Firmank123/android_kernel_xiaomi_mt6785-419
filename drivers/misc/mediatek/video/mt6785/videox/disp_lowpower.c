@@ -1354,12 +1354,14 @@ static int hrt_bw_cond_change_cb(struct notifier_block *nb,
 {
 	int ret, i;
 	unsigned int hrt_idx;
-	int active_cfg_id = 0;
 
 	primary_display_manual_lock();
 
 #ifdef CONFIG_MTK_HIGH_FRAME_RATE
-	active_cfg_id = primary_display_get_current_cfg_id();
+	{
+		int active_cfg_id = primary_display_get_current_cfg_id();
+		UNUSED(active_cfg_id);
+	}
 #endif
 	switch (value) {
 	case BW_THROTTLE_START: /* CAM on */

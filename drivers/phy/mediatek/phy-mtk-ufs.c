@@ -224,7 +224,7 @@ static int ufs_mtk_phy_probe(struct platform_device *pdev)
 
 	generic_phy = devm_phy_create(dev, NULL, &ufs_mtk_phy_ops);
 	if (IS_ERR(generic_phy)) {
-		dev_err(dev, "%s mtk phy clk create fail: %d\n", __func__, PTR_ERR(generic_phy));
+		dev_err(dev, "%s mtk phy clk create fail: %ld\n", __func__, PTR_ERR(generic_phy));
 		return PTR_ERR(generic_phy);
 	}
 
@@ -232,7 +232,7 @@ static int ufs_mtk_phy_probe(struct platform_device *pdev)
 
 	phy_provider = devm_of_phy_provider_register(dev, of_phy_simple_xlate);
 	if (IS_ERR(phy_provider)) {
-		dev_err(dev, "%s mtk phy clk register fail: %d\n", __func__, PTR_ERR(phy_provider));
+		dev_err(dev, "%s mtk phy clk register fail: %ld\n", __func__, PTR_ERR(phy_provider));
 	}
 	return PTR_ERR_OR_ZERO(phy_provider);
 }

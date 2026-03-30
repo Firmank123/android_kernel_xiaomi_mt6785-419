@@ -570,7 +570,7 @@ static int clmutt_send_tm_signal(enum mutt_type type, unsigned long state)
 		ret = -1;
 	}
 
-	mtk_cooler_mutt_dprintk_always("[%s] %s:pid is %d, %d; MD off=%d\n",
+	mtk_cooler_mutt_dprintk_always("[%s] %s:pid is %u, %u; MD off=%lu\n",
 		__func__, clmutt_data.cooler_param[type].name,
 		clmutt_data.tm_pid, clmutt_data.tm_input_pid, state);
 
@@ -815,7 +815,7 @@ static void mtk_cl_mutt_set_onIMS(enum mutt_type type, unsigned long state)
 		clmutt_data.cooler_param[type].noIMS_state = state;
 		clmutt_data.cooler_param[type].target_level = target_lv;
 		clmutt_data.cur_level = target_lv;
-		mtk_cooler_mutt_dprintk_always("[%s] %s:set noIMS state=%d\n",
+		mtk_cooler_mutt_dprintk_always("[%s] %s:set noIMS state=%lu\n",
 			__func__, clmutt_data.cooler_param[type].name, state);
 	}
 }

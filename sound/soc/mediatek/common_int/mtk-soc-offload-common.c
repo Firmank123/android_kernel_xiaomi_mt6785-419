@@ -421,7 +421,7 @@ static int mtk_compr_offload_set_params(struct snd_compr_stream *stream,
 	afe_offload_block.samplerate = codec.sample_rate;
 
 	if (!dsp) {
-		pr_debug("dsp is null\n", __func__);
+		pr_debug("%s: dsp is null\n", __func__);
 		return -1;
 	}
 

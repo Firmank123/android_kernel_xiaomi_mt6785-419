@@ -822,10 +822,6 @@ static void disp_aal_dre3_irq_handle(enum DISP_MODULE_ENUM module,
 	int update_method)
 {
 	bool config_success = false;
-	bool read_success = false;
-	unsigned long flags;
-	int dre_blk_x_num, dre_blk_y_num;
-	unsigned int read_value;
 	int hist_apb, hist_int;
 
 	/* Only process AAL0 in single module state */
@@ -1339,7 +1335,7 @@ void disp_aal_on_start_of_frame(enum disp_aal_id_t id)
 	if (aal_sram_method != AAL_SRAM_SOF)
 		return;
 
-	AAL_DBG("[SRAM] g_aal_dre_config(%d) in SOF", g_aal_dre_config);
+	AAL_DBG("[SRAM] g_aal_dre_config(%d) in SOF", atomic_read(&g_aal_dre_config));
 	disp_aal_update_dre3_sram(module, true);
 #endif
 }

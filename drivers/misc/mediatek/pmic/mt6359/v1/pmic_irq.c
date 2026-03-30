@@ -79,12 +79,12 @@ irqreturn_t legacy_pmic_int_handler(int irq, void *data)
 /*
  * PMIC Interrupt service
  */
-void pmic_enable_interrupt(enum PMIC_IRQ_ENUM intNo, unsigned int en, char *str)
+void pmic_enable_interrupt(unsigned int intNo, unsigned int en, char *str)
 {
 	int ret;
 	unsigned int irq;
 	const char *name;
-	struct legacy_pmic_callback *pmic_cb = &pmic_cbs[intNo];
+	struct legacy_pmic_callback *pmic_cb = &pmic_cbs[(enum PMIC_IRQ_ENUM)intNo];
 	struct irq_desc *desc;
 
 	if (intNo == INT_ENUM_MAX) {
@@ -95,12 +95,12 @@ void pmic_enable_interrupt(enum PMIC_IRQ_ENUM intNo, unsigned int en, char *str)
 			__func__, intNo);
 		return;
 	}
-	irq = mt6358_irq_get_virq(pmic_dev->parent, intNo);
+	irq = mt6358_irq_get_virq(pmic_dev->parent, (enum PMIC_IRQ_ENUM)intNo);
 	if (!irq) {
 		pr_notice(PMICTAG "[%s] fail intNo=%d\n", __func__, intNo);
 		return;
 	}
-	name = mt6358_irq_get_name(pmic_dev->parent, intNo);
+	name = mt6358_irq_get_name(pmic_dev->parent, (enum PMIC_IRQ_ENUM)intNo);
 	if (name == NULL) {
 		pr_notice(PMICTAG "[%s] no irq name at intNo=%d\n",
 			__func__, intNo);
@@ -125,10 +125,10 @@ void pmic_enable_interrupt(enum PMIC_IRQ_ENUM intNo, unsigned int en, char *str)
 		__func__, intNo, en, desc ? desc->depth : -1);
 }
 
-void pmic_register_interrupt_callback(enum PMIC_IRQ_ENUM intNo,
+void pmic_register_interrupt_callback(unsigned int intNo,
 		void (EINT_FUNC_PTR) (void))
 {
-	struct legacy_pmic_callback *pmic_cb = &pmic_cbs[intNo];
+	struct legacy_pmic_callback *pmic_cb = &pmic_cbs[(enum PMIC_IRQ_ENUM)intNo];
 
 	if (intNo == INT_ENUM_MAX) {
 		pr_info(PMICTAG "[%s] disable intNo=%d\n", __func__, intNo);

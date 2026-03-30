@@ -5228,7 +5228,7 @@ static void __ufshcd_transfer_req_compl(struct ufs_hba *hba,
 
 	ocs_err_status = ufshcd_readl(hba, REG_UFS_MTK_OCS_ERR_STATUS);
 	if (ocs_err_status & 0xC0000000) {
-		dev_info(hba->dev, "inv. ocs: 0x%x, reqs: 0x%x\n",
+		dev_info(hba->dev, "inv. ocs: 0x%x, reqs: 0x%lx\n",
 			 ocs_err_status, hba->outstanding_reqs);
 		ufshcd_update_evt_hist(hba, UFS_EVT_OCS_ERR,
 				       ocs_err_status);
@@ -6079,7 +6079,7 @@ static irqreturn_t ufshcd_intr(int irq, void *__hba)
 
 	if (unlikely(hba->clk_gating.state == CLKS_OFF)) {
 		/* trigger kernel panic if clock is not enabled */
-		dev_err(hba->dev, "%s: clock not on.\n");
+		dev_err(hba->dev, "%s: clock not on.\n", __func__);
 		BUG();
 	}
 

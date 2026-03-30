@@ -48,12 +48,12 @@ static void ultra_ipi_Unloaded_Handling(void)
 }
 static void ultra_ipi_IPICmd_Received(struct ipi_msg_t *ipi_msg)
 {
-	pr_info("%s(),msg_id=%d\n", ipi_msg->msg_id);
+	pr_info("%s(),msg_id=%d\n", __func__, ipi_msg->msg_id);
 	ultra_ipi_rx_handle(ipi_msg->msg_id, (void *)ipi_msg->payload);
 }
 static bool ultra_ipi_IPICmd_ReceiveAck(struct ipi_msg_t *ipi_msg)
 {
-	pr_info("%s(),msg_id=%d\n", ipi_msg->msg_id);
+	pr_info("%s(),msg_id=%d\n", __func__, ipi_msg->msg_id);
 	ultra_ipi_tx_ack_handle(ipi_msg->msg_id, 0);
 	return true;
 }

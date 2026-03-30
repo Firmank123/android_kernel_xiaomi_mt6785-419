@@ -761,7 +761,7 @@ static void vcu_set_gce_cmd(struct cmdq_pkt *pkt,
 				addr, data, dma_offset, dma_size);
 		}
 #endif
-		pr_debug("[VCU] %s addr: 0x%x, data: 0x%x, offset: 0x%x, size: 0x%x\n",
+		pr_debug("[VCU] %s addr: 0x%llx, data: 0x%llx, offset: 0x%x, size: 0x%x\n",
 			__func__, addr, data, dma_offset, dma_size);
 	break;
 #endif

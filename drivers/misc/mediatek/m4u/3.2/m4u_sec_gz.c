@@ -76,8 +76,8 @@ TZ_RESULT _prepare_region(KREE_SHAREDMEM_PARAM *shm_param)
 	pa = (uint64_t)virt_to_phys((void *)shared_buf);
 
 	M4ULOG_HIGH
-	    ("[MTEE][%s]: size=%u, &buf=%llx, PA=%llx, num_Pa=%d, order=%u",
-	     __func__, _shm_size, (uint64_t)shared_buf, pa, _num_PA,
+	    ("[MTEE][%s]: size=%u, &buf=%p, PA=%llx, num_Pa=%d, order=%u",
+	     __func__, _shm_size, shared_buf, pa, _num_PA,
 	     _shm_order);
 
 	shm_param->buffer = (void *)pa;
@@ -85,7 +85,7 @@ TZ_RESULT _prepare_region(KREE_SHAREDMEM_PARAM *shm_param)
 	shm_param->region_id = 0;
 	shm_param->mapAry = NULL;	/*continuous pages */
 	M4ULOG_HIGH
-	    ("[MTEE][%s]prepare buf: shm_param->buffer=%llx, size =%d",
+	    ("[MTEE][%s]prepare buf: shm_param->buffer=%p, size =%d",
 	     __func__, shm_param->buffer, shm_param->size);
 	return TZ_RESULT_SUCCESS;
 

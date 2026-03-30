@@ -1225,13 +1225,13 @@ void *ccu_da_to_va(u64 da, uint32_t len)
 	struct CcuMemInfo *bin_mem = ccu_get_binary_memory();
 
 	if (bin_mem == NULL) {
-		LOG_ERR("failed lookup da(%x), bin_mem NULL", da);
+		LOG_ERR("failed lookup da(%llx), bin_mem NULL", da);
 		return NULL;
 	}
 	if (da < CCU_CACHE_BASE) {
 		offset = da;
 		if ((len & 0x3) || (da & 0x3)) {
-			LOG_ERR("[%s] align violation: da(0x%x) size(0x%x)\n",
+			LOG_ERR("[%s] align violation: da(0x%llx) size(0x%x)\n",
 				__func__, da, len);
 			return NULL;
 		} else if ((offset >= 0) && ((offset + len) < CCU_PMEM_SIZE)) {
@@ -1242,7 +1242,7 @@ void *ccu_da_to_va(u64 da, uint32_t len)
 	} else if (da >= CCU_CORE_DMEM_BASE) {
 		offset = da - CCU_CORE_DMEM_BASE;
 		if ((len & 0x3) || (da & 0x3)) {
-			LOG_ERR("[%s] align violation: da(0x%x) size(0x%x)\n",
+			LOG_ERR("[%s] align violation: da(0x%llx) size(0x%x)\n",
 				__func__, da, len);
 			return NULL;
 		} else if ((offset >= 0) && ((offset + len) < CCU_DMEM_SIZE)) {
@@ -1260,7 +1260,7 @@ void *ccu_da_to_va(u64 da, uint32_t len)
 		}
 	}
 
-	LOG_ERR("failed lookup da(%x) len(%x) to va, offset(%x)", da, offset);
+	LOG_ERR("failed lookup da(%llx) len(%x) to va, offset(%x)", da, len, offset);
 	return NULL;
 }
 

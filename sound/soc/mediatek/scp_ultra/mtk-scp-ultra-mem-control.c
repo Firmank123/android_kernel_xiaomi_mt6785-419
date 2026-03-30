@@ -31,17 +31,17 @@ int mtk_scp_ultra_reserved_dram_init(void)
 		scp_get_reserve_mem_size(ULTRA_MEM_ID);
 
 	if (!ultra_resv_mem->phy_addr) {
-		pr_err("%s(), scp ultra_resv_mem phy_addr error\n");
+		pr_err("%s(), scp ultra_resv_mem phy_addr error\n", __func__);
 		return -1;
 	}
 
 	if (!ultra_resv_mem->vir_addr) {
-		pr_err("%s(), scp ultra_resv_mem phy_addr vir_addr error\n");
+		pr_err("%s(), scp ultra_resv_mem phy_addr vir_addr error\n", __func__);
 		return -1;
 	}
 
 	if (!ultra_resv_mem->size) {
-		pr_err("%s(), scp ultra_resv_mem phy_addr size error\n");
+		pr_err("%s(), scp ultra_resv_mem phy_addr size error\n", __func__);
 		return -1;
 	}
 
@@ -168,10 +168,10 @@ int mtk_scp_ultra_allocate_mem(struct snd_pcm_substream *substream,
 	}
 
 	dev_info(scp_ultra->dev,
-		 "%s(), ultra VA:0x%p,PA:0x%lx,size:%d,using_sram=%d\n",
+		 "%s(), ultra VA:0x%p,PA:0x%pad,size:%zu,using_sram=%d\n",
 		 __func__,
 		 ultra_dma_buf->area,
-		 ultra_dma_buf->addr,
+		 &ultra_dma_buf->addr,
 		 ultra_dma_buf->bytes,
 		 memif->using_sram);
 

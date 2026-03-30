@@ -1273,7 +1273,6 @@ int primary_display_get_debug_state(char *stringbuf, int buf_len)
 	struct LCM_PARAMS *lcm_param = disp_lcm_get_params(pgc->plcm);
 	struct LCM_DRIVER *lcm_drv = pgc->plcm->drv;
 	int hrt_table[HRT_LEVEL_NUM];
-	int active_cfg = 0;
 
 	len += scnprintf(stringbuf + len, buf_len - len,
 		"|------------------------------------------------------------------|\n");

@@ -330,9 +330,10 @@ void mtk_vcodec_get_log(struct mtk_vcodec_ctx *ctx, char *val)
 	int len = 0;
 
 	if (!ctx || !val) {
-		mtk_v4l2_err("Invalid arguments, ctx=0x%x, val=0x%x", ctx, val);
+		mtk_v4l2_err("Invalid arguments, ctx=0x%p, val=0x%p", ctx, val);
 		return;
 	}
+
 
 	memset(val, 0x00, LOG_PROPERTY_SIZE);
 

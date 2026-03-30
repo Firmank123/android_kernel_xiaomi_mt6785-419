@@ -630,7 +630,7 @@ static int ufs_mtk_init_reset_control(struct ufs_hba *hba,
 {
 	*rc = devm_reset_control_get(hba->dev, str);
 	if (IS_ERR(*rc)) {
-		dev_info(hba->dev, "Failed to get %s: %d\n", str,
+		dev_info(hba->dev, "Failed to get %s: %ld\n", str,
 			PTR_ERR(*rc));
 		*rc = NULL;
 		return PTR_ERR(*rc);

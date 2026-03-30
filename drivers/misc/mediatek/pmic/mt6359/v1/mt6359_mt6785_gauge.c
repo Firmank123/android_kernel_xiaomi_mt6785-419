@@ -3121,7 +3121,7 @@ int init_devm_channel(void)
 {
 	int ret = -1;
 
-	if (g_pdev == NULL || &g_pdev->dev == NULL)
+	if (g_pdev == NULL)
 		return -1;
 
 	chan_bat_voltage = devm_iio_channel_get(&g_pdev->dev, "pmic_battery_voltage");

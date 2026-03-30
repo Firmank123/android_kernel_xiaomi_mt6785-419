@@ -2483,13 +2483,13 @@ void m4u_call_atf_debug(int m4u_debug_id)
 	unsigned long tf_port = 0;
 	unsigned long tf_en = 0;
 
-	m4u_debug("%s[%lx:%d]\n", __func__, MTK_M4U_DEBUG_DUMP, m4u_debug_id);
+	m4u_debug("%s[%x:%d]\n", __func__, (unsigned int)MTK_M4U_DEBUG_DUMP, m4u_debug_id);
 	arm_smccc_smc(MTK_M4U_DEBUG_DUMP, m4u_debug_id,
 			      0, 0, 0, 0, 0, 0, &res);
 	tf_en = res.a0;
 	tf_port = res.a1;
 	if (tf_en)
-		m4u_info("%s:has_tf:%d, tf_port:0x%x\n",
+		m4u_info("%s:has_tf:%lu, tf_port:0x%lx\n",
 			 __func__, tf_en, tf_port);
 }
 

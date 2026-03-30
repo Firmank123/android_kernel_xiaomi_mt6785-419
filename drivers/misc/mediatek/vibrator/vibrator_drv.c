@@ -208,12 +208,12 @@ static ssize_t vibr_vmax_store(struct device *dev,
 
 	ret = kstrtoint(buf, 10, &vmax);
 	if (ret) {
-		pr_err(VIB_TAG, "kstrtoint failed\n");
+		pr_err(VIB_TAG "kstrtoint failed\n");
 		return ret;
 	}
 
 	if (vmax < 0 || vmax > hw->vib_vol_max) {
-		pr_err(VIB_TAG, "vmax exceeds limits\n");
+		pr_err(VIB_TAG "vmax exceeds limits\n");
 		return -EINVAL;
 	}
 
