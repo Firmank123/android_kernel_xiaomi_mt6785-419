@@ -221,8 +221,9 @@ static void print_enabled_clks(void)
 	const char * const *cn = clkchk_cfg->all_clk_names;
 	const char * const *off_pn;
 	const char *fix_clk = "clk26m";
-    if (!clkchk_cfg)
-        return;
+
+	if (!clkchk_cfg)
+		return;
 
 	pr_warn("enabled clks:\n");
 	off_pn = clkchk_cfg->off_pll_names;
