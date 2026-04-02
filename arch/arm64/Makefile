@@ -49,6 +49,10 @@ $(warning Detected assembler with broken .inst; disassembly will be unreliable)
   endif
 endif
 
+ifeq ($(cc-name),gcc)
+KBUILD_CFLAGS	+= -march=armv8.2-a+crypto+fp16+dotprod -mtune=cortex-a76.cortex-a55
+endif
+
 KBUILD_CFLAGS	+= -mgeneral-regs-only $(lseinstr) $(brokengasinst) $(compat_vdso)
 KBUILD_CFLAGS	+= -fno-asynchronous-unwind-tables
 KBUILD_CFLAGS	+= $(call cc-disable-warning, psabi)
