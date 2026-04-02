@@ -11,15 +11,6 @@ source "arch/$(SRCARCH)/Kconfig"
 
 menu "General architecture-dependent options"
 
-config LTO_GCC
-	bool "Enable GCC Link Time Optimization (LTO)"
-	default n
-	help
-	  This option enables Link Time Optimization (LTO) when building
-	  with GCC. This allows the compiler to optimize across compilation
-	  units, which can result in better performance and smaller binaries.
-	  Note that this requires a toolchain with LTO support (gcc-ar, gcc-nm).
-
 config CRASH_CORE
 	bool
 

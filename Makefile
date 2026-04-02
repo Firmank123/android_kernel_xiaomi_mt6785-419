@@ -394,8 +394,6 @@ STRIP		= llvm-strip
 else
 CC		= $(CROSS_COMPILE)gcc
 LD		= $(CROSS_COMPILE)ld
-DISABLE_LTO	:=
-export DISABLE_LTO
 AR		= $(CROSS_COMPILE)ar
 NM		= $(CROSS_COMPILE)nm
 OBJCOPY		= $(CROSS_COMPILE)objcopy
@@ -461,19 +459,6 @@ KBUILD_LDFLAGS_MODULE := -T $(srctree)/scripts/module-common.lds
 KBUILD_LDFLAGS :=
 GCC_PLUGINS_CFLAGS :=
 CLANG_FLAGS :=
-
-export CONFIG_LTO_GCC
-ifdef CONFIG_LTO_GCC
-CC_FLAGS_LTO	:= -flto=auto -ffat-lto-objects
-export CC_FLAGS_LTO
-DISABLE_LTO	:= -fno-lto -fno-fat-lto-objects
-export DISABLE_LTO
-AR		:= $(CROSS_COMPILE)gcc-ar
-NM		:= $(CROSS_COMPILE)gcc-nm
-KBUILD_CFLAGS	+= $(CC_FLAGS_LTO)
-LTO_PLUGIN	:= $(shell $(CC) -print-prog-name=liblto_plugin.so)
-KBUILD_LDFLAGS	+= -plugin $(LTO_PLUGIN) -flto=auto
-endif
 
 export ARCH SRCARCH CONFIG_SHELL HOSTCC KBUILD_HOSTCFLAGS CROSS_COMPILE LD CC
 export CPP AR NM STRIP OBJCOPY OBJDUMP PAHOLE RESOLVE_BTFIDS OBJSIZE READELF KBUILD_HOSTLDFLAGS KBUILD_HOSTLDLIBS
