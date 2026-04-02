@@ -7,7 +7,7 @@
 #include <linux/of_address.h>
 
 #include <linux/io.h>
-#include <linux/slab.h>p
+#include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/clkdev.h>
 
