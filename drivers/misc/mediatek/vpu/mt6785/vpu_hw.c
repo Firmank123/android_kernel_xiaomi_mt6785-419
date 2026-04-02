@@ -1641,10 +1641,9 @@ static int vpu_enable_regulator_and_clock(int core)
 	/*--enable regulator--*/
 	ret1 = vvpu_regulator_set_mode(true);
 	udelay(100);//slew rate:rising10mV/us
-if (g_vpu_log_level > Log_STATE_MACHINE)
-	LOG_INF("enable vvpu ret:%d\n", ret1);
 
-
+	if (g_vpu_log_level > Log_STATE_MACHINE)
+		LOG_INF("enable vvpu ret:%d\n", ret1);
 
 	get_vvpu_opp = vpu_get_hw_vvpu_opp(core);
 	//if (opps.vvpu.index != get_vvpu_opp)
@@ -2067,8 +2066,10 @@ out:
 		opps.dspcore[core].index = 15;
 	opps.dsp.index = 9;
 	opps.ipu_if.index = 9;
-if (g_vpu_log_level > Log_STATE_MACHINE)
-	LOG_INF("[vpu_%d] dis_rc -\n", core);
+
+	if (g_vpu_log_level > Log_STATE_MACHINE)
+		LOG_INF("[vpu_%d] dis_rc -\n", core);
+
 	return ret;
 #endif
 }
