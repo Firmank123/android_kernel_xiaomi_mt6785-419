@@ -2603,6 +2603,9 @@ static int __init jpeg_init(void)
 static void __exit jpeg_exit(void)
 {
 	JPEG_MSG("%s +\n", __func__);
+
+	unregister_pm_notifier(&gJpegqDev.pm_notifier);
+
 #ifdef JPEG_DEV
 	cdev_del(jenc_cdev);
 	unregister_chrdev_region(jenc_devno, 1);

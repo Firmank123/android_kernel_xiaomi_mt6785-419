@@ -422,6 +422,8 @@ static int mtk_vcodec_enc_remove(struct platform_device *pdev)
 {
 	struct mtk_vcodec_dev *dev = platform_get_drvdata(pdev);
 
+	unregister_pm_notifier(&dev->pm_notifier);
+
 	mtk_unprepare_venc_emi_bw();
 	mtk_unprepare_venc_dvfs();
 

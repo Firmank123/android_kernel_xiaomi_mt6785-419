@@ -904,6 +904,10 @@ static struct mtkfb_fence_buf_info *mtkfb_get_buf_info(void)
 		mtkfb_init_buf_info(buf);
 	} else {
 		buf = kzalloc(sizeof(*buf), GFP_KERNEL);
+		if (!buf) {
+			mutex_unlock(&fence_buffer_mutex);
+			return NULL;
+		}
 		mtkfb_init_buf_info(buf);
 		MTKFB_FENCE_LOG("create new mtkfb_fence_buf_info node %p\n",
 				buf);
