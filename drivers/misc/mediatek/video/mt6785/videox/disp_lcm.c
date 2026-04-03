@@ -1064,12 +1064,15 @@ static ssize_t dsi_display_set_hbm(struct device *dev,struct device_attribute *a
 	struct dsi_cmd_desc dimming_on[1];
 	struct dsi_cmd_desc dimming_off[1];
 	dimming_on[0].payload = vmalloc(sizeof(unsigned char));
+	if (!dimming_on[0].payload)
+		return -ENOMEM;
 	dimming_on[0].vc = 0;
 	dimming_on[0].dlen = 1;
 	dimming_on[0].link_state = 1;
 	dimming_on[0].dtype = 0x53;
 	*(dimming_on[0].payload) = 0xE8;
 	do_lcm_vdo_lp_write(dimming_on,1);
+	vfree(dimming_on[0].payload);
 
 	rc = kstrtoint(buf, 10, &param);
 	if (rc) {
@@ -1086,12 +1089,15 @@ static ssize_t dsi_display_set_hbm(struct device *dev,struct device_attribute *a
 			break;
 		case 0x0://hbm off
 			dimming_off[0].payload = vmalloc(sizeof(unsigned char));
+			if (!dimming_off[0].payload)
+				return -ENOMEM;
 			dimming_off[0].vc = 0;
 			dimming_off[0].dlen = 1;
 			dimming_off[0].link_state = 1;
 			dimming_off[0].dtype = 0x53;
 			*(dimming_off[0].payload) = 0x28;
 			do_lcm_vdo_lp_write(dimming_off,1);
+			vfree(dimming_off[0].payload);
 			display_feature_push_table(hbm0_off,1,1);
 			break;
 		default:

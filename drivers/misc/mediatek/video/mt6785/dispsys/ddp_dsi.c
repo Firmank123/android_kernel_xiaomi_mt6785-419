@@ -5492,6 +5492,11 @@ long  lcm_mipi_reg_write(char *buf, unsigned long  count)
 
 
 		lcm_adb_cmd.payload = vmalloc(packet_count * sizeof(unsigned char));
+		if (!lcm_adb_cmd.payload) {
+			kfree(data);
+			retval = -ENOMEM;
+			goto exit;
+		}
 		lcm_adb_cmd.vc = 0;
 		lcm_adb_cmd.dlen = packet_count;
 		lcm_adb_cmd.link_state = 1;

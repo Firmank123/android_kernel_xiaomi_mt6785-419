@@ -2956,7 +2956,7 @@ static struct disp_internal_buffer_info *allocat_decouple_buffer(int size)
 	if (!buf_info) {
 		DISP_PR_ERR(
 			"Fatal error, kzalloc internal buffer info failed!\n");
-		kfree(buf_info);
+		ion_client_destroy(client);
 		return NULL;
 	}
 
