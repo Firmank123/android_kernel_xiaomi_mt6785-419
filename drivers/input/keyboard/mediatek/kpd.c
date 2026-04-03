@@ -545,8 +545,33 @@ static const struct of_device_id kpd_of_match[] = {
 	{},
 };
 
+static int kpd_pdrv_remove(struct platform_device *pdev)
+{
+	if (kp_base) {
+		iounmap(kp_base);
+		kp_base = NULL;
+	}
+	
+	if (kp_irqnr) {
+		disable_irq_wake(kp_irqnr);
+		free_irq(kp_irqnr, NULL);
+	}
+	
+#ifdef CONFIG_PM_SLEEP
+	if (kpd_suspend_lock) {
+		wakeup_source_unregister(kpd_suspend_lock);
+		kpd_suspend_lock = NULL;
+	}
+#endif
+	
+	debugfs_remove_recursive(kpd_droot);
+	
+	return 0;
+}
+
 static struct platform_driver kpd_pdrv = {
 	.probe = kpd_pdrv_probe,
+	.remove = kpd_pdrv_remove,
 	.suspend = kpd_pdrv_suspend,
 	.resume = kpd_pdrv_resume,
 	.driver = {

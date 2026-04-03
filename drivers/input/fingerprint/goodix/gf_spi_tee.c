@@ -1008,6 +1008,9 @@ static long gf_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			if (copy_from_user(transfer_buf, ioc.buf, ioc.len)) {
 				gf_debug(ERR_LOG, "Failed to copy gf_ioc_transfer from user to kernel\n");
 				retval = -EFAULT;
+				kfree(transfer_buf);
+				mutex_unlock(&gf_dev->buf_lock);
+				break;
 			} else {
 				gf_spi_write_bytes_ree(gf_dev, ioc.addr, ioc.len, transfer_buf);
 			}
@@ -1018,6 +1021,9 @@ static long gf_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			if (copy_to_user(ioc.buf, transfer_buf, ioc.len)) {
 				gf_debug(ERR_LOG, "Failed to copy gf_ioc_transfer from kernel to user\n");
 				retval = -EFAULT;
+				kfree(transfer_buf);
+				mutex_unlock(&gf_dev->buf_lock);
+				break;
 			}
 		}
 		kfree(transfer_buf);

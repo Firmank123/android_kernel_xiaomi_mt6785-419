@@ -182,6 +182,9 @@ static char aw8622_waveform_file_name[][AW8622_WAVEFORM_NAME_MAX] = {
 #endif
 };
 
+/* Forward declarations */
+static void aw8622_cleanup_waveform_data(struct aw8622_haptic *haptic);
+
 /* wave file data parse and save */
 static void aw8622_wavefrom_data_load(const struct firmware *cont, void *context)
 {
@@ -296,6 +299,7 @@ static void aw8622_waveform_data_delay_work(struct work_struct *delay_work) {
 		haptic->p_waveform_data = vmalloc(haptic->waveform_data_nums * sizeof(struct waveform_data_info));
 		if (!haptic->p_waveform_data) {
 			pr_err("%s: Error allocating memory\n", __func__);
+			haptic->is_wavefrom_ready = false;
 			return;
 		}
 		haptic->is_malloc_wavedata_info = true;
@@ -317,8 +321,10 @@ static void aw8622_waveform_data_delay_work(struct work_struct *delay_work) {
 			cunt++;
 			msleep(100);
 			if (cunt > 200) {
-				pr_err("%s: load waveform file %s faied\n", __func__, aw8622_waveform_file_name[haptic->cur_load_idx + haptic->load_idx_offset]);
+				pr_err("%s: load waveform file %s failed\n", __func__, aw8622_waveform_file_name[haptic->cur_load_idx + haptic->load_idx_offset]);
 				haptic->p_waveform_data[haptic->cur_load_idx].is_loaded = false;
+				haptic->is_wavefrom_ready = false;
+				aw8622_cleanup_waveform_data(haptic);
 				return;
 			}
 		}
@@ -357,8 +363,11 @@ static void aw8622_waveform_data_delay_work(struct work_struct *delay_work) {
 	haptic->wave_vir = dma_alloc_coherent(haptic->dev, haptic->wave_max_len,
 		  &haptic->wave_phy, GFP_KERNEL | GFP_DMA);
 	if (!haptic->wave_vir) {
-		pr_err("%s()  alloc memory fail\n", __func__);
+		pr_err("%s() alloc memory fail\n", __func__);
+		haptic->is_wavefrom_ready = false;
+		aw8622_cleanup_waveform_data(haptic);
 		ret = -ENOMEM;
+		return;
 	}
 	memset(haptic->wave_vir, 0, haptic->wave_max_len);
 	haptic->is_wavefrom_ready = true;
@@ -1170,6 +1179,52 @@ static int __maybe_unused aw8622_haptic_resume(struct device *dev)
 static SIMPLE_DEV_PM_OPS(aw8622_haptic_pm_ops,
 			 aw8622_haptic_suspend, aw8622_haptic_resume);
 
+static void aw8622_cleanup_waveform_data(struct aw8622_haptic *haptic)
+{
+	int i;
+
+	if (haptic->p_waveform_data) {
+		for (i = 0; i < haptic->waveform_data_nums; i++) {
+			if (haptic->p_waveform_data[i].data) {
+				vfree(haptic->p_waveform_data[i].data);
+				haptic->p_waveform_data[i].data = NULL;
+			}
+		}
+		vfree(haptic->p_waveform_data);
+		haptic->p_waveform_data = NULL;
+		haptic->is_malloc_wavedata_info = false;
+	}
+}
+
+static int aw8622_haptic_remove(struct platform_device *pdev)
+{
+	struct aw8622_haptic *haptic = platform_get_drvdata(pdev);
+
+	if (!haptic)
+		return 0;
+
+	cancel_delayed_work_sync(&haptic->load_waveform_work);
+	cancel_delayed_work_sync(&haptic->hw_off_work);
+	cancel_work_sync(&haptic->test_work);
+	cancel_work_sync(&haptic->stop_play_work);
+
+	hrtimer_cancel(&haptic->timer);
+
+	sysfs_remove_group(&pdev->dev.kobj, &aw8622_vibrator_attribute_group);
+
+	if (haptic->wave_vir) {
+		dma_free_coherent(haptic->dev, haptic->wave_max_len,
+				  haptic->wave_vir, haptic->wave_phy);
+		haptic->wave_vir = NULL;
+	}
+
+	aw8622_cleanup_waveform_data(haptic);
+
+	mutex_destroy(&haptic->mutex_lock);
+
+	return 0;
+}
+
 #ifdef CONFIG_OF
 static const struct of_device_id pwm_vibra_dt_match_table[] = {
 	{ .compatible = "awinic,aw8622" },
@@ -1180,6 +1235,7 @@ MODULE_DEVICE_TABLE(of, pwm_vibra_dt_match_table);
 
 static struct platform_driver aw8622_haptic_driver = {
 	.probe	= aw8622_haptic_probe,
+	.remove	= aw8622_haptic_remove,
 	.driver	= {
 		.name	= "awinic,aw8622-haptic",
 		.pm	= &aw8622_haptic_pm_ops,

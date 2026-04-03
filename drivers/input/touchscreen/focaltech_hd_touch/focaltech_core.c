@@ -840,6 +840,7 @@ static int fts_report_buffer_init(struct fts_ts_data *ts_data)
 		kzalloc(ts_data->pnt_buf_size + 1, GFP_KERNEL);
 	if (!ts_data->point_buf) {
 		FTS_ERROR("failed to alloc memory for point buf");
+		kfree_safe(ts_data->pdata);
 		return -ENOMEM;
 	}
 
@@ -848,6 +849,7 @@ static int fts_report_buffer_init(struct fts_ts_data *ts_data)
 	if (!ts_data->events) {
 		FTS_ERROR("failed to alloc memory for point events");
 		kfree_safe(ts_data->point_buf);
+		kfree_safe(ts_data->pdata);
 		return -ENOMEM;
 	}
 
@@ -1145,7 +1147,7 @@ err_power_init:
 	kfree_safe(ts_data->point_buf);
 	kfree_safe(ts_data->events);
 err_report_buffer:
-	/* input_unregister_device(ts_data->input_dev); */
+	input_unregister_device(ts_data->input_dev);
 err_input_init:
 	if (ts_data->ts_workqueue)
 		destroy_workqueue(ts_data->ts_workqueue);
@@ -1192,7 +1194,7 @@ static int fts_ts_remove_entry(struct fts_ts_data *ts_data)
 	fts_bus_exit(ts_data);
 
 	free_irq(ts_data->irq, ts_data);
-	/* input_unregister_device(ts_data->input_dev); */
+	input_unregister_device(ts_data->input_dev);
 
 	if (ts_data->ts_workqueue)
 		destroy_workqueue(ts_data->ts_workqueue);
