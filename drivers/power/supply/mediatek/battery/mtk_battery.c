@@ -338,6 +338,7 @@ int battery_get_boot_mode(void)
 				boot_mode = tag->bootmode;
 				gm.boot_mode = tag->bootmode;
 			}
+			of_node_put(boot_node);
 		}
 	}
 	bm_debug("%s: boot mode=%d\n", __func__, boot_mode);

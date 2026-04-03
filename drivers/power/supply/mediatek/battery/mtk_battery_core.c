@@ -692,6 +692,7 @@ void fgauge_get_profile_id(void)
 	battery_dev = of_find_device_by_node(batterty_node);
 	if (!battery_dev) {
 		bm_err("[%s] of_find_device_by_node fail\n", __func__);
+		of_node_put(batterty_node);
 		return;
 	}
 
@@ -700,6 +701,7 @@ void fgauge_get_profile_id(void)
 		ret = PTR_ERR(channel);
 		bm_err("[%s] iio channel not found %d\n",
 		__func__, ret);
+		of_node_put(batterty_node);
 		return;
 	}
 
@@ -709,6 +711,7 @@ void fgauge_get_profile_id(void)
 
 	if (ret <= 0) {
 		bm_err("[%s] iio_read_channel_processed failed\n", __func__);
+		of_node_put(batterty_node);
 		return;
 	}
 
@@ -721,6 +724,7 @@ void fgauge_get_profile_id(void)
 		sizeof(int)) != TOTAL_BATTERY_NUMBER) {
 		bm_err("[%s]error! voltage range incorrect!\n",
 			__func__);
+		of_node_put(batterty_node);
 		return;
 	}
 
@@ -736,6 +740,7 @@ void fgauge_get_profile_id(void)
 	bm_err("[%s]Battery id (%d)\n",
 		__func__,
 		gm.battery_id);
+	of_node_put(batterty_node);
 }
 
 int battery_get_bat_resistance_id(void)
