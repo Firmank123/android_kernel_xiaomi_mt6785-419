@@ -2212,9 +2212,20 @@ int ged_dvfs_init_opp_cost(void)
 		return -EPROBE_DEFER;
 
 	g_aOppStat = vmalloc(sizeof(struct GED_DVFS_OPP_STAT) * oppsize);
+	if (!g_aOppStat)
+		return -ENOMEM;
 
-	for (i = 0; i < oppsize; i++)
+	for (i = 0; i < oppsize; i++) {
 		g_aOppStat[i].uMem.aTrans = vmalloc(sizeof(uint32_t) * oppsize);
+		if (!g_aOppStat[i].uMem.aTrans) {
+			/* Cleanup previously allocated entries */
+			while (--i >= 0)
+				vfree(g_aOppStat[i].uMem.aTrans);
+			vfree(g_aOppStat);
+			g_aOppStat = NULL;
+			return -ENOMEM;
+		}
+	}
 
 	g_num = oppsize;
 	ged_dvfs_reset_opp_cost(oppsize);

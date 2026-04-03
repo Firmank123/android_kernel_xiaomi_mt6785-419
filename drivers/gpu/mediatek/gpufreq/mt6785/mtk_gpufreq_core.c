@@ -3006,10 +3006,15 @@ static void __mt_gpufreq_setup_opp_table(
 	unsigned int i = 0;
 
 	g_opp_table = kzalloc((num) * sizeof(*freqs), GFP_KERNEL);
-	g_opp_table_default = kzalloc((num) * sizeof(*freqs), GFP_KERNEL);
-
-	if (g_opp_table == NULL || g_opp_table_default == NULL)
+	if (g_opp_table == NULL)
 		return;
+
+	g_opp_table_default = kzalloc((num) * sizeof(*freqs), GFP_KERNEL);
+	if (g_opp_table_default == NULL) {
+		kfree(g_opp_table);
+		g_opp_table = NULL;
+		return;
+	}
 
 	for (i = 0; i < num; i++) {
 		g_opp_table[i].gpufreq_khz = freqs[i].gpufreq_khz;
@@ -3179,6 +3184,8 @@ static void __mt_gpufreq_set_initial(void)
 
 static int __mt_gpufreq_init_pmic(struct platform_device *pdev)
 {
+	int ret;
+
 	g_pmic = kzalloc(sizeof(struct g_pmic_info), GFP_KERNEL);
 
 	if (g_pmic == NULL)
@@ -3190,7 +3197,8 @@ static int __mt_gpufreq_init_pmic(struct platform_device *pdev)
 		gpufreq_pr_err(
 				"@%s: cannot get VGPU\n",
 				__func__);
-		return PTR_ERR(g_pmic->reg_vgpu);
+		ret = PTR_ERR(g_pmic->reg_vgpu);
+		goto err_vgpu;
 	}
 
 	/* VSRAM_GPU is MT6359's VPU buck */
@@ -3199,7 +3207,8 @@ static int __mt_gpufreq_init_pmic(struct platform_device *pdev)
 		gpufreq_pr_err(
 				"@%s: cannot get VSRAM_GPU\n",
 				__func__);
-		return PTR_ERR(g_pmic->reg_vsram_gpu);
+		ret = PTR_ERR(g_pmic->reg_vsram_gpu);
+		goto err_vsram;
 	}
 
 	/* setup PMIC init value */
@@ -3251,6 +3260,13 @@ static int __mt_gpufreq_init_pmic(struct platform_device *pdev)
 			(regulator_get_voltage(g_pmic->reg_vsram_gpu) / 1000));
 
 	return 0;
+
+err_vsram:
+	regulator_put(g_pmic->reg_vgpu);
+err_vgpu:
+	kfree(g_pmic);
+	g_pmic = NULL;
+	return ret;
 }
 
 static int __mt_gpufreq_init_clk(struct platform_device *pdev)
@@ -3273,7 +3289,7 @@ static int __mt_gpufreq_init_clk(struct platform_device *pdev)
 		gpufreq_pr_err(
 				"@%s: cannot get clk_mux\n",
 				__func__);
-		return PTR_ERR(g_clk->clk_mux);
+		goto err_clk;
 	}
 
 	g_clk->clk_main_parent = devm_clk_get(&pdev->dev, "clk_main_parent");
@@ -3281,7 +3297,7 @@ static int __mt_gpufreq_init_clk(struct platform_device *pdev)
 		gpufreq_pr_err(
 				"@%s: cannot get clk_main_parent\n",
 				__func__);
-		return PTR_ERR(g_clk->clk_main_parent);
+		goto err_clk;
 	}
 
 	g_clk->clk_sub_parent = devm_clk_get(&pdev->dev, "clk_sub_parent");
@@ -3289,7 +3305,7 @@ static int __mt_gpufreq_init_clk(struct platform_device *pdev)
 		gpufreq_pr_err(
 				"@%s: cannot get clk_sub_parent\n",
 				__func__);
-		return PTR_ERR(g_clk->clk_sub_parent);
+		goto err_clk;
 	}
 
 	g_clk->subsys_mfg_cg = devm_clk_get(&pdev->dev, "subsys_mfg_cg");
@@ -3297,7 +3313,7 @@ static int __mt_gpufreq_init_clk(struct platform_device *pdev)
 		gpufreq_pr_err(
 				"@%s: cannot get subsys_mfg_cg\n",
 				__func__);
-		return PTR_ERR(g_clk->subsys_mfg_cg);
+		goto err_clk;
 	}
 
 	g_clk->mtcmos_mfg_async = devm_clk_get(&pdev->dev, "mtcmos_mfg_async");
@@ -3305,7 +3321,7 @@ static int __mt_gpufreq_init_clk(struct platform_device *pdev)
 		gpufreq_pr_err(
 				"@%s: cannot get mtcmos_mfg_async\n",
 				__func__);
-		return PTR_ERR(g_clk->mtcmos_mfg_async);
+		goto err_clk;
 	}
 
 	g_clk->mtcmos_mfg = devm_clk_get(&pdev->dev, "mtcmos_mfg");
@@ -3313,7 +3329,7 @@ static int __mt_gpufreq_init_clk(struct platform_device *pdev)
 		gpufreq_pr_err(
 				"@%s: cannot get mtcmos_mfg\n",
 				__func__);
-		return PTR_ERR(g_clk->mtcmos_mfg);
+		goto err_clk;
 	}
 
 	g_clk->mtcmos_mfg_core0 = devm_clk_get(&pdev->dev, "mtcmos_mfg_core0");
@@ -3321,7 +3337,7 @@ static int __mt_gpufreq_init_clk(struct platform_device *pdev)
 		gpufreq_pr_err(
 				"@%s: cannot get mtcmos_mfg_core0\n",
 				__func__);
-		return PTR_ERR(g_clk->mtcmos_mfg_core0);
+		goto err_clk;
 	}
 
 	g_clk->mtcmos_mfg_core1 = devm_clk_get(&pdev->dev, "mtcmos_mfg_core1");
@@ -3329,7 +3345,7 @@ static int __mt_gpufreq_init_clk(struct platform_device *pdev)
 		gpufreq_pr_err(
 				"@%s: cannot get mtcmos_mfg_core1\n",
 				__func__);
-		return PTR_ERR(g_clk->mtcmos_mfg_core1);
+		goto err_clk;
 	}
 
 	g_clk->mtcmos_mfg_core2 = devm_clk_get(&pdev->dev, "mtcmos_mfg_core2");
@@ -3337,7 +3353,7 @@ static int __mt_gpufreq_init_clk(struct platform_device *pdev)
 		gpufreq_pr_err(
 				"@%s: cannot get mtcmos_mfg_core2\n",
 				__func__);
-		return PTR_ERR(g_clk->mtcmos_mfg_core2);
+		goto err_clk;
 	}
 
 	g_clk->mtcmos_mfg_core3 = devm_clk_get(&pdev->dev, "mtcmos_mfg_core3");
@@ -3345,7 +3361,7 @@ static int __mt_gpufreq_init_clk(struct platform_device *pdev)
 		gpufreq_pr_err(
 				"@%s: cannot get mtcmos_mfg_core3\n",
 				__func__);
-		return PTR_ERR(g_clk->mtcmos_mfg_core3);
+		goto err_clk;
 	}
 
 	gpufreq_pr_info(
@@ -3362,6 +3378,11 @@ static int __mt_gpufreq_init_clk(struct platform_device *pdev)
 			g_clk->mtcmos_mfg_core2, g_clk->mtcmos_mfg_core3);
 
 	return 0;
+
+err_clk:
+	kfree(g_clk);
+	g_clk = NULL;
+	return -ENODEV;
 }
 
 static void __mt_gpufreq_init_efuse(struct platform_device *pdev)
