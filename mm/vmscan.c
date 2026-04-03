@@ -3851,7 +3851,7 @@ static long lruvec_evictable_size(struct lruvec *lruvec, bool can_swap)
 			gen = lru_gen_from_seq(seq);
 
 			for (zone = 0; zone < MAX_NR_ZONES; zone++)
-				total += max(READ_ONCE(lrugen->nr_pages[gen][type][zone]), 0L);
+				total += max(READ_ONCE(lrugen->nr_pages[gen][type][zone]), 0UL);
 		}
 	}
 
@@ -3881,7 +3881,7 @@ static bool should_run_aging(struct lruvec *lruvec, unsigned long max_seq,
 			gen = lru_gen_from_seq(seq);
 
 			for (zone = 0; zone < MAX_NR_ZONES; zone++)
-				size += max(READ_ONCE(lrugen->nr_pages[gen][type][zone]), 0L);
+				size += max(READ_ONCE(lrugen->nr_pages[gen][type][zone]), 0UL);
 
 			total += size;
 			if (seq == max_seq)
