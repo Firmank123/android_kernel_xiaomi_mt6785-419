@@ -98,6 +98,15 @@ bool cass_cpu_better(const struct cass_cpu_cand *a,
 		     const struct cass_cpu_cand *b, unsigned long p_util,
 		     int this_cpu, int prev_cpu, bool sync)
 {
+	/*
+	 * fair.c defines fits_capacity() only under MTK scheduler extension.
+	 * Keep CASS buildable when MTK scheduler extension is disabled.
+	 */
+#ifdef CONFIG_MTK_SCHED_EXTENSION
+#define cass_fits_capacity(util, cap) fits_capacity((util), (cap))
+#else
+#define cass_fits_capacity(util, cap) (((util) * 1280) < ((cap) * 1024))
+#endif
 #define cass_cmp(a, b) ({ res = (a) - (b); })
 #define cass_eq(a, b) ({ res = (a) == (b); })
 	long res;
@@ -113,8 +122,8 @@ bool cass_cpu_better(const struct cass_cpu_cand *a,
 		goto done;
 
 	/* Prefer the CPU that fits the task */
-	if (cass_cmp(fits_capacity(p_util, a->cap_max),
-		     fits_capacity(p_util, b->cap_max)))
+	if (cass_cmp(cass_fits_capacity(p_util, a->cap_max),
+		     cass_fits_capacity(p_util, b->cap_max)))
 		goto done;
 
 	/* Prefer the CPU that isn't the single fastest one in the system */
@@ -154,6 +163,9 @@ bool cass_cpu_better(const struct cass_cpu_cand *a,
 done:
 	/* @a is a better CPU than @b if @res is positive */
 	return res > 0;
+#undef cass_fits_capacity
+#undef cass_eq
+#undef cass_cmp
 }
 
 static int cass_best_cpu(struct task_struct *p, int prev_cpu, bool sync, bool rt)
