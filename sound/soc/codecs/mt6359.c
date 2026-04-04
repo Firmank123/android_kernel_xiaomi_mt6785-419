@@ -8237,6 +8237,7 @@ static int mt6359_platform_driver_probe(struct platform_device *pdev)
 				      "mediatek,pwrap-regmap", 0);
 	if (pwrap_node) {
 		priv->regmap = pwrap_node_to_regmap(pwrap_node);
+		of_node_put(pwrap_node);
 		if (IS_ERR(priv->regmap))
 			return PTR_ERR(priv->regmap);
 	} else {

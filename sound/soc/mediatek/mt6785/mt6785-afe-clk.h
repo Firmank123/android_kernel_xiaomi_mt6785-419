@@ -202,6 +202,8 @@ int mt6785_get_apll_by_rate(struct mtk_base_afe *afe, int rate);
 int mt6785_get_apll_by_name(struct mtk_base_afe *afe, const char *name);
 
 extern void aud_intbus_mux_sel(unsigned int aud_idx);
+extern void *APMIXEDSYS_ADDRESS;
+extern void *CKSYS_ADDRESS;
 
 /* these will be replaced by using CCF */
 int mt6785_mck_enable(struct mtk_base_afe *afe, int mck_id, int rate);

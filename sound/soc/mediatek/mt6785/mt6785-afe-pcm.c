@@ -5529,6 +5529,13 @@ static int mt6785_afe_pcm_dev_remove(struct platform_device *pdev)
 
 	/* disable afe clock */
 	mt6785_afe_disable_clock(afe);
+
+	/* unmap ioremap addresses */
+	if (APMIXEDSYS_ADDRESS)
+		iounmap(APMIXEDSYS_ADDRESS);
+	if (CKSYS_ADDRESS)
+		iounmap(CKSYS_ADDRESS);
+
 	return 0;
 }
 

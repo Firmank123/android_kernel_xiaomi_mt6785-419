@@ -1717,6 +1717,7 @@ static int mt6785_mt6359_dev_probe(struct platform_device *pdev)
 		if (ret < 0) {
 			dev_err(&pdev->dev,
 				"i2s out get_dai_link_codecs fail\n");
+			of_node_put(spk_node);
 			return -EINVAL;
 		}
 		ret = snd_soc_of_get_dai_link_codecs(
@@ -1724,8 +1725,10 @@ static int mt6785_mt6359_dev_probe(struct platform_device *pdev)
 		if (ret < 0) {
 			dev_err(&pdev->dev,
 				"i2s in get_dai_link_codecs fail\n");
+			of_node_put(spk_node);
 			return -EINVAL;
 		}
+		of_node_put(spk_node);
 	}
 
 	platform_node = of_parse_phandle(pdev->dev.of_node,
@@ -1758,6 +1761,8 @@ static int mt6785_mt6359_dev_probe(struct platform_device *pdev)
 	if (!codec_node) {
 		dev_err(&pdev->dev,
 			"Property 'audio-codec' missing or invalid\n");
+		of_node_put(platform_node);
+		of_node_put(dsp_node);
 		return -EINVAL;
 	}
 	for (i = 0; i < card->num_links; i++) {
@@ -1781,6 +1786,9 @@ static int mt6785_mt6359_dev_probe(struct platform_device *pdev)
 		sizeof(struct snd_soc_codec_conf), GFP_KERNEL);
 	if (!mt_prince_codec_conf) {
 		ret = -ENOMEM;
+		of_node_put(platform_node);
+		of_node_put(dsp_node);
+		of_node_put(codec_node);
 		return ret;
 	}
 
@@ -1792,8 +1800,15 @@ static int mt6785_mt6359_dev_probe(struct platform_device *pdev)
 		if (ret) {
 			dev_info(&pdev->dev,
 				"%s: failed to read prince dev prefix, ret = %d\n", __func__, ret);
-				ret = -EINVAL;
-				return ret;
+			ret = -EINVAL;
+			of_node_put(prince_codec_of_node);
+			/* Release all previously stored prince nodes */
+			while (--i >= 0)
+				of_node_put(mt_prince_codec_conf[card->num_configs + i].of_node);
+			of_node_put(platform_node);
+			of_node_put(dsp_node);
+			of_node_put(codec_node);
+			return ret;
 		}
 		dev_info(&pdev->dev,
 			"%s: prince_dev prefix[%d] = %s\n", __func__, i, prince_name_prefix);
@@ -1811,6 +1826,17 @@ static int mt6785_mt6359_dev_probe(struct platform_device *pdev)
 	if (ret)
 		dev_err(&pdev->dev, "%s snd_soc_register_card fail %d\n",
 			__func__, ret);
+
+	/* Release device tree node references */
+	of_node_put(platform_node);
+	of_node_put(dsp_node);
+	of_node_put(codec_node);
+#ifdef CONFIG_SND_SOC_CS35L41
+	/* Release prince codec nodes */
+	for (i = 0; i < cirrus_prince_devs; i++)
+		of_node_put(mt_prince_codec_conf[card->num_configs - cirrus_prince_devs + i].of_node);
+#endif
+
 	return ret;
 }
 
