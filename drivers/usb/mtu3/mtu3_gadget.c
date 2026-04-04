@@ -546,6 +546,7 @@ static void mtu3_gadget_set_ready(struct usb_gadget *gadget)
 		ret = of_add_property(np, prop);
 		if (ret) {
 			pr_err("add prop failed\n");
+			kfree(prop);
 			return;
 		}
 	}

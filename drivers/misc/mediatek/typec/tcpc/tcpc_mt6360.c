@@ -2485,6 +2485,7 @@ static int mt6360_tcpcdev_init(struct mt6360_chip *chip, struct device *dev)
 				"%s, bootmode:%d\n", __func__, tag->bootmode);
 			chip->tcpc->bootmode = tag->bootmode;
 		}
+		of_node_put(boot_node);
 	}
 #endif
 
@@ -2768,6 +2769,7 @@ static int __init mt6360_init(void)
 	np = of_find_node_by_name(NULL, "usb_type_c");
 	pr_info("%s usb_type_c node %s\n", __func__,
 		np == NULL ? "not found" : "found");
+	of_node_put(np);
 
 	return i2c_add_driver(&mt6360_driver);
 }

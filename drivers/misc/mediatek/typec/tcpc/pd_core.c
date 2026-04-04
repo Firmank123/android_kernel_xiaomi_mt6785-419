@@ -440,6 +440,7 @@ static int pd_parse_pdata(struct pd_port *pd_port)
 
 		pd_parse_pdata_src_cap_ext(pd_port, np);
 		pd_parse_pdata_mfrs(pd_port, np);
+		of_node_put(np);
 	}
 
 	return 0;
@@ -530,6 +531,7 @@ static void pd_core_power_flags_init(struct pd_port *pd_port)
 
 	snk_cap->pdos[0] |= snk_flag;
 	src_cap->pdos[0] |= src_flag;
+	of_node_put(np);
 }
 
 #ifdef CONFIG_RECV_BAT_ABSENT_NOTIFY
