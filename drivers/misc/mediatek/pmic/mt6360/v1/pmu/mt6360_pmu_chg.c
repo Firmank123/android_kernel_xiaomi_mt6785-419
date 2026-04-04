@@ -532,6 +532,7 @@ bool is_usb_rdy(struct device *dev)
 	node = of_parse_phandle(dev->of_node, "usb", 0);
 	if (node) {
 		ready = of_property_read_bool(node, "gadget-ready");
+		of_node_put(node);
 		dev_info(dev, "gadget-ready=%d\n", ready);
 	} else
 		dev_info(dev, "usb node missing or invalid\n");
@@ -649,6 +650,7 @@ static int mt6360_chgdet_pre_process(struct mt6360_pmu_chg_info *mpci)
 			}
 			else
 				boot_mode = tag->bootmode;
+			of_node_put(boot_node);
 		}
 	}
 	if (attach && (boot_mode == 1)) {
@@ -2804,6 +2806,7 @@ static int mt6360_chg_init_setting(struct mt6360_pmu_chg_info *mpci)
 			}
 			else
 				boot_mode = tag->bootmode;
+			of_node_put(boot_node);
 		}
 	}
 
