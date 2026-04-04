@@ -1978,6 +1978,7 @@ unsigned int ufs_mtk_get_boot_type(void)
 		pr_notice("[%s] 'atag,boot' is not found\n", __func__);
 	}
 
+	of_node_put(node);
 	return ret;
 }
 

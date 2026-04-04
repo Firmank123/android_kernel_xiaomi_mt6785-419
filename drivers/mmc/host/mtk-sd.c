@@ -2776,6 +2776,7 @@ static int check_boot_type(struct platform_device *pdev)
 		dev_info(&pdev->dev, "atag,boot is not found\n");
 	}
 
+	of_node_put(node);
 	return ret;
 }
 
