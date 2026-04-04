@@ -992,12 +992,15 @@ void mddpInit(void)
 	tag = (struct tag_bootmode *) of_get_property(np_chosen, "atag,boot",
 			NULL);
 
-	if (!tag)
+	if (!tag) {
+		of_node_put(np_chosen);
 		return;
+	}
 
 	DBGLOG(INIT, INFO, "bootmode: 0x%x\n", tag->bootmode);
 	g_wifi_boot_mode = tag->bootmode;
 
+	of_node_put(np_chosen);
 	mddpRegisterCb();
 }
 

@@ -249,12 +249,14 @@ static VOID mtk_wcn_get_regmap(struct platform_device *pdev)
 	pmic_pdev = of_find_device_by_node(pmic_node);
 	if (!pmic_pdev) {
 		WMT_PLAT_PR_INFO("get pmic_pdev fail\n");
+		of_node_put(pmic_node);
 		return;
 	}
 
 	chip = dev_get_drvdata(&(pmic_pdev->dev));
 	if (!chip) {
 		WMT_PLAT_PR_INFO("get chip fail\n");
+		of_node_put(pmic_node);
 		return;
 	}
 
@@ -263,6 +265,7 @@ static VOID mtk_wcn_get_regmap(struct platform_device *pdev)
 		g_regmap = NULL;
 		WMT_PLAT_PR_INFO("get regmap fail\n");
 	}
+	of_node_put(pmic_node);
 }
 #endif
 
@@ -422,7 +425,9 @@ static INT32 mtk_wmt_probe(struct platform_device *pdev)
 				gps_lna_pin_num = (pinmux >> 8) & 0xff;
 				WMT_PLAT_PR_INFO("GPS LNA gpio pin number:%d, pinmux:0x%08x.\n",
 						   gps_lna_pin_num, pinmux);
+				of_node_put(pins_node);
 			}
+			of_node_put(pinctl_node);
 		}
 	}
 
