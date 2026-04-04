@@ -858,6 +858,7 @@ static int accelhub_probe(struct platform_device *pdev)
 exit_create_attr_failed:
 	accelhub_delete_attr(&(accelhub_init_info.platform_diver_addr->driver));
 exit_kfree:
+	scp_power_monitor_deregister(&scp_ready_notifier);
 	kfree(obj);
 	obj_ipi_data = NULL;
 exit:
@@ -875,6 +876,7 @@ static int accelhub_remove(struct platform_device *pdev)
 	if (err)
 		pr_err("accelhub_delete_attr fail: %d\n", err);
 	accel_factory_device_deregister(&gsensor_factory_device);
+	scp_power_monitor_deregister(&scp_ready_notifier);
 
 	kfree(platform_get_drvdata(pdev));
 	return 0;

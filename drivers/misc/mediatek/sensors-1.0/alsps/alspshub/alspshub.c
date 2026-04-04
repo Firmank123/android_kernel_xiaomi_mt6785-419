@@ -1008,8 +1008,11 @@ static int alspshub_probe(struct platform_device *pdev)
 	return 0;
 
 exit_create_attr_failed:
+	if (obj && obj->ps_wake_lock)
+		wakeup_source_unregister(obj->ps_wake_lock);
 	alspshub_delete_attr(&(alspshub_init_info.platform_diver_addr->driver));
 exit_kfree:
+	scp_power_monitor_deregister(&scp_ready_notifier);
 	kfree(obj);
 	obj_ipi_data = NULL;
 exit:
@@ -1031,6 +1034,7 @@ static int alspshub_remove(struct platform_device *pdev)
 	if (err)
 		pr_err("alspshub_delete_attr fail: %d\n", err);
 	alsps_factory_device_deregister(&alspshub_factory_device);
+	scp_power_monitor_deregister(&scp_ready_notifier);
 	kfree(platform_get_drvdata(pdev));
 	return 0;
 

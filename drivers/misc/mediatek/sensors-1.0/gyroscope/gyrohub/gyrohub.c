@@ -870,7 +870,7 @@ static int gyrohub_probe(struct platform_device *pdev)
 	err = gpio_config();
 	if (err < 0) {
 		pr_err("gpio_config failed\n");
-		goto exit_kfree;
+		goto exit_kfree_no_deregister;
 	}
 	scp_power_monitor_register(&scp_ready_notifier);
 	err = scp_sensorHub_data_registration(ID_GYROSCOPE, gyro_recv_data);
@@ -927,6 +927,8 @@ static int gyrohub_probe(struct platform_device *pdev)
 exit_create_attr_failed:
 	gyrohub_delete_attr(&(gyrohub_init_info.platform_diver_addr->driver));
 exit_kfree:
+	scp_power_monitor_deregister(&scp_ready_notifier);
+exit_kfree_no_deregister:
 	kfree(obj);
 	obj_ipi_data = NULL;
 exit:
@@ -946,6 +948,7 @@ static int gyrohub_remove(struct platform_device *pdev)
 		pr_err("gyrohub_delete_attr fail: %d\n", err);
 
 	gyro_factory_device_deregister(&gyrohub_factory_device);
+	scp_power_monitor_deregister(&scp_ready_notifier);
 
 	kfree(platform_get_drvdata(pdev));
 	return 0;

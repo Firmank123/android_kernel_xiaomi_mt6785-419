@@ -42,6 +42,12 @@ scp_power_monitor_register(struct scp_power_monitor *monitor)
 	return 0;
 }
 
+int __attribute__((weak))
+scp_power_monitor_deregister(struct scp_power_monitor *monitor)
+{
+	return 0;
+}
+
 /* scp_nano_ipi_status: 1 :ready to ipi  0:not ready*/
 int scp_nano_ipi_status;
 
@@ -264,6 +270,18 @@ int nanohub_ipi_probe(struct platform_device *pdev)
 
 static int nanohub_ipi_remove(struct platform_device *pdev)
 {
+	struct iio_dev *iio_dev = nanohub_iio_dev;
+	struct nanohub_ipi_data *ipi_data;
+
+	scp_power_monitor_deregister(&nano_ipi_notifier);
+	if (iio_dev) {
+		ipi_data = iio_priv(iio_dev);
+		if (ipi_data && ipi_data->data.comms.rx_buffer) {
+			kfree(ipi_data->data.comms.rx_buffer);
+			ipi_data->data.comms.rx_buffer = NULL;
+		}
+	}
+
 	return 0;
 }
 

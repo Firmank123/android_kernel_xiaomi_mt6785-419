@@ -466,6 +466,7 @@ static int barohub_probe(struct platform_device *pdev)
 exit_create_attr_failed:
 	barohub_delete_attr(&(barohub_init_info.platform_diver_addr->driver));
 exit_kfree:
+	scp_power_monitor_deregister(&scp_ready_notifier);
 	kfree(obj);
 	obj_ipi_data = NULL;
 exit:
@@ -485,6 +486,7 @@ static int barohub_remove(struct platform_device *pdev)
 		pr_err("barohub_delete_attr failed, err = %d\n", err);
 
 	baro_factory_device_deregister(&barohub_factory_device);
+	scp_power_monitor_deregister(&scp_ready_notifier);
 
 	obj_ipi_data = NULL;
 	kfree(platform_get_drvdata(pdev));

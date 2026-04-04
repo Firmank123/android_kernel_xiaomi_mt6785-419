@@ -651,6 +651,7 @@ static int maghub_remove(struct platform_device *pdev)
 
 	kfree(platform_get_drvdata(pdev));
 	mag_factory_device_deregister(&maghub_factory_device);
+	scp_power_monitor_deregister(&scp_ready_notifier);
 	return 0;
 }
 
