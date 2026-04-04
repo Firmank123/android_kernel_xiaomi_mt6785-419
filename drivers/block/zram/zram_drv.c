@@ -1338,7 +1338,7 @@ static int zram_bvec_read(struct zram *zram, struct bio_vec *bvec,
 	page = bvec->bv_page;
 	if (is_partial_io(bvec)) {
 		/* Use a temporary buffer to decompress the page */
-		page = alloc_page(GFP_NOIO|__GFP_HIGHMEM);
+		page = alloc_page(GFP_NOIO|__GFP_HIGHMEM|__GFP_NORETRY);
 		if (!page)
 			return -ENOMEM;
 	}
@@ -1424,7 +1424,7 @@ compress_again:
 		atomic64_inc(&zram->stats.writestall);
 		handle = zs_malloc(zram->mem_pool, comp_len,
 				GFP_NOIO | __GFP_HIGHMEM |
-				__GFP_MOVABLE);
+				__GFP_MOVABLE | __GFP_NORETRY);
 		if (!handle)
 			return -ENOMEM;
 
@@ -1505,7 +1505,7 @@ static int zram_bvec_write(struct zram *zram, struct bio_vec *bvec,
 		 * This is a partial IO. We need to read the full page
 		 * before to write the changes.
 		 */
-		page = alloc_page(GFP_NOIO|__GFP_HIGHMEM);
+		page = alloc_page(GFP_NOIO|__GFP_HIGHMEM|__GFP_NORETRY);
 		if (!page)
 			return -ENOMEM;
 
