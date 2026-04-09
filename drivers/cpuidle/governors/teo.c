@@ -103,7 +103,7 @@
  * Idle state exit latency threshold used for deciding whether or not to check
  * the time till the closest expected timer event.
  */
-#define LATENCY_THRESHOLD_NS	(RESIDENCY_THRESHOLD_NS / 2)
+#define LATENCY_THRESHOLD_US	(RESIDENCY_THRESHOLD_US / 2)
 
 /*
  * The PULSE value is added to metrics when they grow and the DECAY_SHIFT value
@@ -130,7 +130,7 @@ struct teo_bin {
 
 /**
  * struct teo_cpu - CPU data used by the TEO cpuidle governor.
- * @sleep_length_ns: Time till the closest timer event (at the selection time).
+ * @sleep_length_us: Time till the closest timer event (at the selection time).
  * @state_bins: Idle state data bins for this CPU.
  * @total: Grand total of the "intercepts" and "hits" metrics for all bins.
  * @tick_intercepts: "Intercepts" before TICK_USEC.
@@ -139,7 +139,7 @@ struct teo_bin {
  * @tick_wakeup: Set if the last wakeup was by the scheduler tick.
  */
 struct teo_cpu {
-	s64 sleep_length_ns;
+	unsigned int sleep_length_us;
 	struct teo_bin state_bins[CPUIDLE_STATE_MAX];
 	unsigned int total;
 	unsigned int total_tick;
@@ -167,8 +167,8 @@ static void teo_decay(unsigned int *metric)
  */
 static void teo_update(struct cpuidle_driver *drv, struct cpuidle_device *dev)
 {
-        struct teo_cpu *cpu_data = this_cpu_ptr(&teo_cpus);
-	unsigned int sleep_length_us = ktime_to_us(cpu_data->sleep_length_ns);
+	struct teo_cpu *cpu_data = this_cpu_ptr(&teo_cpus);
+	unsigned int sleep_length_us = cpu_data->sleep_length_us;
 	int i, idx_timer = 0, idx_duration = 0;
 	int target_residency;
 	unsigned int measured_us;
@@ -292,7 +292,7 @@ static int teo_find_shallower_state(struct cpuidle_driver *drv,
 static int teo_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 		      bool *stop_tick)
 {
-        struct teo_cpu *cpu_data = this_cpu_ptr(&teo_cpus);
+	struct teo_cpu *cpu_data = this_cpu_ptr(&teo_cpus);
 	int latency_req = cpuidle_governor_latency_req(dev->cpu);
 	ktime_t delta_tick = TICK_NSEC / 2;
 	unsigned int idx_intercept_sum = 0;
@@ -304,7 +304,6 @@ static int teo_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 	int idx0 = 0, idx = -1;
 	int i;
 	int duration_us;
-	bool cpu_utilized;
 
 	if (dev->last_state_idx >= 0) {
 		teo_update(drv, dev);
@@ -320,7 +319,7 @@ static int teo_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 	 * be opportunities to ask for a deeper idle state when no imminent
 	 * timers are scheduled which may be missed.
 	 */
-	cpu_data->sleep_length_ns = KTIME_MAX;
+	cpu_data->sleep_length_us = UINT_MAX;
 
 	/* Check if there is any choice in the first place. */
 	if (drv->state_count < 2) {
@@ -391,7 +390,7 @@ static int teo_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 			 * equal to the tick period length.
 			 */
 			while (min_idx < idx &&
-			       drv->states[min_idx].target_residency_ns < TICK_NSEC)
+			       drv->states[min_idx].target_residency < TICK_USEC)
 				min_idx++;
 		}
 
@@ -431,7 +430,7 @@ static int teo_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 	 * from being selected at one point even if no imminent timers are
 	 * scheduled.
 	 *
-	 * However, frequent timers in the RESIDENCY_THRESHOLD_NS range on one
+	 * However, frequent timers in the RESIDENCY_THRESHOLD_US range on one
 	 * CPU are unlikely (user space has a default 50 us slack value for
 	 * hrtimers and there are relatively few timers with a lower deadline
 	 * value in the kernel), and even if they did happen, the potential
@@ -446,12 +445,12 @@ static int teo_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 	 * length need not be known in that case.
 	 */
 	if ((!idx || drv->states[idx].target_residency < RESIDENCY_THRESHOLD_US) &&
-            (2 * cpu_data->short_idles >= cpu_data->total ||
-             latency_req < LATENCY_THRESHOLD_US))
+	    (2 * cpu_data->short_idles >= cpu_data->total ||
+	     latency_req < LATENCY_THRESHOLD_US))
 		goto out_tick;
 
-	cpu_data->sleep_length_ns = tick_nohz_get_sleep_length(&delta_tick);
-	duration_us = ktime_to_us(cpu_data->sleep_length_ns);
+	cpu_data->sleep_length_us = ktime_to_us(tick_nohz_get_sleep_length(&delta_tick));
+	duration_us = cpu_data->sleep_length_us;
 
 	if (!idx)
 		goto out_tick;
@@ -502,6 +501,7 @@ out_tick:
  * teo_reflect - Note that governor data for the CPU need to be updated.
  * @dev: Target CPU.
  * @state: Entered state.
+ */
 static void teo_reflect(struct cpuidle_device *dev, int state)
 {
 	struct teo_cpu *cpu_data = this_cpu_ptr(&teo_cpus);
