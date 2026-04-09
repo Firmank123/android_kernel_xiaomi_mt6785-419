@@ -9,6 +9,8 @@ ARGS="-nostdlib"
 while [ "$1" != "" ] ; do
 	case "$1" in
 	-save-temps|-m32|-m64) N="$1" ;;
+	-fuse-ld=*|-no-pie) N="$1" ;;
+	-mno-fix-cortex-a53-835769) N="$1" ;;
 	-r) N="$1" ;;
 	-[Wg]*) N="$1" ;;
 	-[olv]|-[Ofd]*|-nostdlib) N="$1" ;;
