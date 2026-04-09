@@ -202,6 +202,7 @@ int cpuidle_enter_state(struct cpuidle_device *dev, struct cpuidle_driver *drv,
 			int index)
 {
 	int entered_state;
+	s64 diff;
 
 	struct cpuidle_state *target_state = &drv->states[index];
 	bool broadcast = !!(target_state->flags & CPUIDLE_FLAG_TIMER_STOP);
@@ -259,7 +260,7 @@ int cpuidle_enter_state(struct cpuidle_device *dev, struct cpuidle_driver *drv,
 	dev->last_residency = (int) diff;
 
 	if (entered_state >= 0) {
-		s64 diff, delay = drv->states[entered_state].exit_latency;
+		s64 delay = drv->states[entered_state].exit_latency;
 		int i;
 
 		/* Update cpuidle counters */
