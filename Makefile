@@ -629,20 +629,11 @@ export LLVM_AR LLVM_NM
 endif
 
 ifdef CONFIG_LTO_GCC
-LTO_CFLAGS	:= -flto -flto=jobserver -fuse-linker-plugin
-ifeq ($(CONFIG_LD_IS_LLD),y)
-LTO_CFLAGS	+= -ffat-lto-objects
-else
-LTO_CFLAGS	+= -fno-fat-lto-objects -fwhole-program
-endif
+LTO_CFLAGS	:= -flto -flto=jobserver -fno-fat-lto-objects \
+		   -fuse-linker-plugin -fwhole-program
 KBUILD_CFLAGS	+= $(LTO_CFLAGS)
 LTO_LDFLAGS	:= $(LTO_CFLAGS) -Wno-lto-type-mismatch -Wno-psabi \
-		   -Wno-stringop-overflow
-ifdef CONFIG_LD_IS_LLD
-LTO_LDFLAGS	+= -fuse-ld=lld -mno-fix-cortex-a53-835769 -no-pie
-else
-LTO_LDFLAGS	+= -flinker-output=nolto-rel
-endif
+		   -Wno-stringop-overflow -flinker-output=nolto-rel
 LDFINAL		:= $(CONFIG_SHELL) $(srctree)/scripts/gcc-ld $(LTO_LDFLAGS)
 AR		:= $(CROSS_COMPILE)gcc-ar
 NM		:= $(CROSS_COMPILE)gcc-nm
