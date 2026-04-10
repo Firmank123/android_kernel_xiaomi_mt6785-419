@@ -328,12 +328,3 @@ static int cass_select_task_rq_fair(struct task_struct *p, int prev_cpu,
 
 	return cass_select_task_rq(p, prev_cpu, wake_flags, false);
 }
-
-int cass_select_task_rq_rt(struct task_struct *p, int prev_cpu, int sd_flag,
-			   int wake_flags, int sibling_count_hint)
-{
-	if (sd_flag != SD_BALANCE_WAKE && sd_flag != SD_BALANCE_FORK)
-		return prev_cpu;
-
-	return cass_select_task_rq(p, prev_cpu, wake_flags, true);
-}
