@@ -3081,6 +3081,10 @@ int wake_up_state(struct task_struct *p, unsigned int state)
  *
  * __sched_fork() is basic setup used by init_idle() too:
  */
+#ifdef CONFIG_SCHED_BORE
+static inline void sched_fork_bore(struct task_struct *p);
+#endif
+
 static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
 {
 	p->on_rq			= 0;
@@ -3248,7 +3252,7 @@ static void __init sched_init_bore(void) {
 	init_task.se.child_burst_last_cached = 0;
 }
 
-void inline sched_fork_bore(struct task_struct *p) {
+static inline void sched_fork_bore(struct task_struct *p) {
 	p->se.burst_time = 0;
 	p->se.curr_burst_penalty = 0;
 	p->se.burst_score = 0;
