@@ -164,6 +164,18 @@ extern uint sched_burst_cache_lifetime;
 static int __maybe_unused three          = 3;
 static int __maybe_unused sixty_four     = 64;
 static int __maybe_unused maxval_12_bits = 4095;
+#ifdef CONFIG_SCHED_DEBUG
+static unsigned int sched_latency_ns_locked = 8000000;
+static unsigned int sched_min_granularity_ns_locked = 1000000;
+static unsigned int sched_wakeup_granularity_ns_locked = 1200000;
+static unsigned int sched_migration_cost_ns_locked = 500000;
+#endif
+static unsigned int sched_burst_smoothness_long_locked = 1;
+static unsigned int sched_burst_smoothness_short_locked = 1;
+static unsigned int sched_burst_fork_atavistic_locked = 1;
+static unsigned int sched_burst_penalty_offset_locked = 24;
+static unsigned int sched_burst_penalty_scale_locked = 1024;
+static unsigned int sched_burst_cache_lifetime_locked = 30000000;
 #endif // CONFIG_SCHED_BORE
 
 /*
@@ -347,10 +359,10 @@ static struct ctl_table sysctl_base_table[] = {
 };
 
 #ifdef CONFIG_SCHED_DEBUG
-static int min_sched_granularity_ns = 100000;		/* 100 usecs */
-static int max_sched_granularity_ns = NSEC_PER_SEC;	/* 1 second */
-static int min_wakeup_granularity_ns;			/* 0 usecs */
-static int max_wakeup_granularity_ns = NSEC_PER_SEC;	/* 1 second */
+static int __maybe_unused min_sched_granularity_ns = 100000;		/* 100 usecs */
+static int __maybe_unused max_sched_granularity_ns = NSEC_PER_SEC;	/* 1 second */
+static int __maybe_unused min_wakeup_granularity_ns;			/* 0 usecs */
+static int __maybe_unused max_wakeup_granularity_ns = NSEC_PER_SEC;	/* 1 second */
 #ifdef CONFIG_SMP
 static int min_sched_tunable_scaling = SCHED_TUNABLESCALING_NONE;
 static int max_sched_tunable_scaling = SCHED_TUNABLESCALING_END-1;
@@ -418,8 +430,8 @@ static struct ctl_table kern_table[] = {
 		.maxlen		= sizeof(unsigned int),
 		.mode		= 0644,
 		.proc_handler	= sched_proc_update_handler,
-		.extra1		= &min_sched_granularity_ns,
-		.extra2		= &max_sched_granularity_ns,
+		.extra1		= &sched_min_granularity_ns_locked,
+		.extra2		= &sched_min_granularity_ns_locked,
 	},
 	{
 		.procname	= "sched_latency_ns",
@@ -427,8 +439,8 @@ static struct ctl_table kern_table[] = {
 		.maxlen		= sizeof(unsigned int),
 		.mode		= 0644,
 		.proc_handler	= sched_proc_update_handler,
-		.extra1		= &min_sched_granularity_ns,
-		.extra2		= &max_sched_granularity_ns,
+		.extra1		= &sched_latency_ns_locked,
+		.extra2		= &sched_latency_ns_locked,
 	},
 	{
 		.procname	= "sched_sync_hint_enable",
@@ -443,8 +455,8 @@ static struct ctl_table kern_table[] = {
 		.maxlen		= sizeof(unsigned int),
 		.mode		= 0644,
 		.proc_handler	= sched_proc_update_handler,
-		.extra1		= &min_wakeup_granularity_ns,
-		.extra2		= &max_wakeup_granularity_ns,
+		.extra1		= &sched_wakeup_granularity_ns_locked,
+		.extra2		= &sched_wakeup_granularity_ns_locked,
 	},
 #ifdef CONFIG_SMP
 	{
@@ -461,7 +473,9 @@ static struct ctl_table kern_table[] = {
 		.data		= &sysctl_sched_migration_cost,
 		.maxlen		= sizeof(unsigned int),
 		.mode		= 0644,
-		.proc_handler	= proc_dointvec,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &sched_migration_cost_ns_locked,
+		.extra2		= &sched_migration_cost_ns_locked,
 	},
 	{
 		.procname	= "sched_nr_migrate",
@@ -1343,8 +1357,8 @@ static struct ctl_table kern_table[] = {
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler = proc_douintvec_minmax,
-		.extra1		= &zero,
-		.extra2		= &one,
+		.extra1		= &sched_burst_smoothness_long_locked,
+		.extra2		= &sched_burst_smoothness_long_locked,
 	},
 	{
 		.procname	= "sched_burst_smoothness_short",
@@ -1352,8 +1366,8 @@ static struct ctl_table kern_table[] = {
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler = proc_douintvec_minmax,
-		.extra1		= &zero,
-		.extra2		= &one,
+		.extra1		= &sched_burst_smoothness_short_locked,
+		.extra2		= &sched_burst_smoothness_short_locked,
 	},
 	{
 		.procname	= "sched_burst_fork_atavistic",
@@ -1361,8 +1375,8 @@ static struct ctl_table kern_table[] = {
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler = proc_douintvec_minmax,
-		.extra1		= &zero,
-		.extra2		= &three,
+		.extra1		= &sched_burst_fork_atavistic_locked,
+		.extra2		= &sched_burst_fork_atavistic_locked,
 	},
 	{
 		.procname	= "sched_burst_penalty_offset",
@@ -1370,8 +1384,8 @@ static struct ctl_table kern_table[] = {
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler = proc_douintvec_minmax,
-		.extra1		= &zero,
-		.extra2		= &sixty_four,
+		.extra1		= &sched_burst_penalty_offset_locked,
+		.extra2		= &sched_burst_penalty_offset_locked,
 	},
 	{
 		.procname	= "sched_burst_penalty_scale",
@@ -1379,15 +1393,17 @@ static struct ctl_table kern_table[] = {
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler = proc_douintvec_minmax,
-		.extra1		= &zero,
-		.extra2		= &maxval_12_bits,
+		.extra1		= &sched_burst_penalty_scale_locked,
+		.extra2		= &sched_burst_penalty_scale_locked,
 	},
 	{
 		.procname	= "sched_burst_cache_lifetime",
 		.data		= &sched_burst_cache_lifetime,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
-		.proc_handler = proc_douintvec,
+		.proc_handler = proc_douintvec_minmax,
+		.extra1		= &sched_burst_cache_lifetime_locked,
+		.extra2		= &sched_burst_cache_lifetime_locked,
 	},
 #endif // CONFIG_SCHED_BORE
 	{
