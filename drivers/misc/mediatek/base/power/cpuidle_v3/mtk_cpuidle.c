@@ -29,6 +29,32 @@ static int mtk_cpuidle_initialized;
 static struct spm_wakeup_source spm_wakeup_src[MAX_SPM_WAKEUP_SRC];
 #endif
 
+static unsigned long mtk_mode_to_psci_state(int mode)
+{
+	switch (mode) {
+	case MTK_STANDBY_MODE:
+		return 0x00000001;
+	case MTK_MCDI_CPU_MODE:
+		return 0x00010001;
+	case MTK_MCDI_CLUSTER_MODE:
+		return 0x01010001;
+	case MTK_SODI_MODE:
+		return 0x01010002;
+	case MTK_SODI3_MODE:
+		return 0x01010003;
+	case MTK_DPIDLE_MODE:
+		return 0x01010004;
+	case MTK_SUSPEND_MODE:
+		return 0x01010005;
+	default:
+		/*
+		 * Keep unknown modes unchanged for compatibility with any
+		 * platform-specific values coming from callers.
+		 */
+		return mode;
+	}
+}
+
 #define MTK_SIP_POWER_FLOW_DEBUG \
 	MTK_SIP_SMC_CMD(0X214)
 
@@ -315,11 +341,13 @@ static void mtk_platform_restore(int cpu)
 int mtk_enter_idle_state(int mode)
 {
 	int cpu, ret;
+	unsigned long psci_state;
 
 	if (!mtk_cpuidle_initialized)
 		return -EOPNOTSUPP;
 
 	cpu = smp_processor_id();
+	psci_state = mtk_mode_to_psci_state(mode);
 
 	cpuidle_fp(cpu, CPUIDLE_FP_ENTER_CPUIDLE);
 	cpuidle_ts(cpu, CPUIDLE_TS_ENTER_CPUIDLE);
@@ -332,11 +360,10 @@ int mtk_enter_idle_state(int mode)
 		cpuidle_ts(cpu, CPUIDLE_TS_BEFORE_ATF);
 
 		/*
-		 * Pass idle state index to cpu_suspend which in turn will
-		 * call the CPU ops suspend protocol with idle index as a
-		 * parameter.
+		 * Pass PSCI power_state to cpu_suspend. MTK idle mode IDs
+		 * are logical selectors and do not always match PSCI values.
 		 */
-		ret = arm_cpuidle_suspend(mode);
+		ret = arm_cpuidle_suspend(psci_state);
 
 		cpuidle_fp(cpu, CPUIDLE_FP_AFTER_ATF);
 		cpuidle_ts(cpu, CPUIDLE_TS_AFTER_ATF);

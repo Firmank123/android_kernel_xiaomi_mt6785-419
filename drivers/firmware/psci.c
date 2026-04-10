@@ -284,6 +284,7 @@ static int __init psci_features(u32 psci_func_id)
 
 #ifdef CONFIG_CPU_IDLE
 static DEFINE_PER_CPU_READ_MOSTLY(u32 *, psci_power_state);
+static DEFINE_PER_CPU_READ_MOSTLY(unsigned int, psci_power_state_count);
 
 static int psci_dt_cpu_init_idle(struct device_node *cpu_node, int cpu)
 {
@@ -331,10 +332,12 @@ static int psci_dt_cpu_init_idle(struct device_node *cpu_node, int cpu)
 	}
 	/* Idle states parsed correctly, initialize per-cpu pointer */
 	per_cpu(psci_power_state, cpu) = psci_states;
+	per_cpu(psci_power_state_count, cpu) = count;
 	return 0;
 
 free_mem:
 	kfree(psci_states);
+	per_cpu(psci_power_state_count, cpu) = 0;
 	return ret;
 }
 
@@ -377,6 +380,7 @@ static int __maybe_unused psci_acpi_cpu_init_idle(unsigned int cpu)
 	}
 	/* Idle states parsed correctly, initialize per-cpu pointer */
 	per_cpu(psci_power_state, cpu) = psci_states;
+	per_cpu(psci_power_state_count, cpu) = count;
 	return 0;
 }
 #else
@@ -415,25 +419,34 @@ int psci_cpu_init_idle(unsigned int cpu)
 static int psci_suspend_finisher(unsigned long index)
 {
 	u32 *state = __this_cpu_read(psci_power_state);
+	unsigned int count = __this_cpu_read(psci_power_state_count);
+	u32 power_state;
 
 	if (WARN_ON_ONCE(!index))
 		return -EINVAL;
 
 	/*
-	 * Some vendor idle paths invoke cpu_suspend before per-CPU PSCI idle
-	 * states are wired. Fall back to passing the suspend argument directly.
+	 * Support both cpuidle state indices and direct PSCI power_state values.
+	 * Vendor idle paths may pass a raw PSCI power_state when per-CPU idle
+	 * state tables are unavailable or use fewer entries than platform modes.
 	 */
-	if (unlikely(!state))
-		return psci_ops.cpu_suspend((u32)index, __pa_symbol(cpu_resume));
+	if (state && likely(index <= count))
+		power_state = state[index - 1];
+	else {
+		power_state = (u32)index;
+		if (!psci_power_state_is_valid(power_state))
+			return -EOPNOTSUPP;
+	}
 
-	return psci_ops.cpu_suspend(state[index - 1],
-				    __pa_symbol(cpu_resume));
+	return psci_ops.cpu_suspend(power_state, __pa_symbol(cpu_resume));
 }
 
 int psci_cpu_suspend_enter(unsigned long index)
 {
 	int ret;
 	u32 *state = __this_cpu_read(psci_power_state);
+	unsigned int count = __this_cpu_read(psci_power_state_count);
+	u32 power_state;
 	/*
 	 * idle state index 0 corresponds to wfi, should never be called
 	 * from the cpu_suspend operations
@@ -442,16 +455,25 @@ int psci_cpu_suspend_enter(unsigned long index)
 		return -EINVAL;
 
 	/*
-	 * Keep suspend functional for vendor cpuidle paths that pass the PSCI
-	 * state directly without setting up psci_power_state first.
+	 * Accept either cpuidle index or direct PSCI power_state.
+	 * If the index is out of the parsed table range, interpret it as
+	 * a raw power_state value after validating its encoding.
 	 */
-	if (unlikely(!state))
-		return psci_ops.cpu_suspend((u32)index, __pa_symbol(cpu_resume));
+	if (state && likely(index <= count))
+		power_state = state[index - 1];
+	else {
+		power_state = (u32)index;
+		if (!psci_power_state_is_valid(power_state))
+			return -EOPNOTSUPP;
+	}
 
-	if (!psci_power_state_loses_context(state[index - 1]))
-		ret = psci_ops.cpu_suspend(state[index - 1], 0);
-	else
+	if (!psci_power_state_loses_context(power_state))
+		ret = psci_ops.cpu_suspend(power_state, 0);
+	else if (state && likely(index <= count))
 		ret = cpu_suspend(index, psci_suspend_finisher);
+	else
+		ret = cpu_suspend((unsigned long)power_state,
+				  psci_suspend_finisher);
 
 	return ret;
 }
