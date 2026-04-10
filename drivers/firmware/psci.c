@@ -416,6 +416,9 @@ static int psci_suspend_finisher(unsigned long index)
 {
 	u32 *state = __this_cpu_read(psci_power_state);
 
+	if (WARN_ON_ONCE(!index || !state))
+		return -EOPNOTSUPP;
+
 	return psci_ops.cpu_suspend(state[index - 1],
 				    __pa_symbol(cpu_resume));
 }
@@ -430,6 +433,9 @@ int psci_cpu_suspend_enter(unsigned long index)
 	 */
 	if (WARN_ON_ONCE(!index))
 		return -EINVAL;
+
+	if (WARN_ON_ONCE(!state))
+		return -EOPNOTSUPP;
 
 	if (!psci_power_state_loses_context(state[index - 1]))
 		ret = psci_ops.cpu_suspend(state[index - 1], 0);
