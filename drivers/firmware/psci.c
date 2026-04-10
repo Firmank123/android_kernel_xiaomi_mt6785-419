@@ -416,8 +416,15 @@ static int psci_suspend_finisher(unsigned long index)
 {
 	u32 *state = __this_cpu_read(psci_power_state);
 
-	if (WARN_ON_ONCE(!index || !state))
-		return -EOPNOTSUPP;
+	if (WARN_ON_ONCE(!index))
+		return -EINVAL;
+
+	/*
+	 * Some vendor idle paths invoke cpu_suspend before per-CPU PSCI idle
+	 * states are wired. Fall back to passing the suspend argument directly.
+	 */
+	if (unlikely(!state))
+		return psci_ops.cpu_suspend((u32)index, __pa_symbol(cpu_resume));
 
 	return psci_ops.cpu_suspend(state[index - 1],
 				    __pa_symbol(cpu_resume));
@@ -434,8 +441,12 @@ int psci_cpu_suspend_enter(unsigned long index)
 	if (WARN_ON_ONCE(!index))
 		return -EINVAL;
 
-	if (WARN_ON_ONCE(!state))
-		return -EOPNOTSUPP;
+	/*
+	 * Keep suspend functional for vendor cpuidle paths that pass the PSCI
+	 * state directly without setting up psci_power_state first.
+	 */
+	if (unlikely(!state))
+		return psci_ops.cpu_suspend((u32)index, __pa_symbol(cpu_resume));
 
 	if (!psci_power_state_loses_context(state[index - 1]))
 		ret = psci_ops.cpu_suspend(state[index - 1], 0);

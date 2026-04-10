@@ -7,6 +7,7 @@
 #define __MTK_MCDI_H__
 
 #include <linux/arm-smccc.h>
+#include <linux/tick.h>
 
 #ifdef CONFIG_ARM64
 #define MTK_SIP_SMC_AARCH_BIT                   0x40000000
@@ -40,12 +41,16 @@ unsigned int get_menu_next_timer_us(void);
 #else
 static inline unsigned int get_menu_predict_us(void)
 {
-	return 0;
+	ktime_t delta_next = 0;
+
+	return ktime_to_us(tick_nohz_get_sleep_length(&delta_next));
 }
 
 static inline unsigned int get_menu_next_timer_us(void)
 {
-	return 0;
+	ktime_t delta_next = 0;
+
+	return ktime_to_us(tick_nohz_get_sleep_length(&delta_next));
 }
 #endif
 
