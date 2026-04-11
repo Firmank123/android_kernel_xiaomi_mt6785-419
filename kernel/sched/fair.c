@@ -38,10 +38,10 @@
  * (to see the precise effective timeslice length of your workload,
  *  run vmstat and monitor the context-switches (cs) field)
  *
- * (default: 8ms * (1 + ilog(ncpus)), units: nanoseconds)
+ * (default: 7ms * (1 + ilog(ncpus)), units: nanoseconds)
  */
-unsigned int sysctl_sched_latency			= 8000000ULL;
-unsigned int normalized_sysctl_sched_latency		= 8000000ULL;
+unsigned int sysctl_sched_latency			= 7000000ULL;
+unsigned int normalized_sysctl_sched_latency		= 7000000ULL;
 
 /*
  * Enable/disable honoring sync flag in energy-aware wakeups.
@@ -69,10 +69,10 @@ enum sched_tunable_scaling sysctl_sched_tunable_scaling = SCHED_TUNABLESCALING_L
 /*
  * Minimal preemption granularity for CPU-bound tasks:
  *
- * (default: 1 msec * (1 + ilog(ncpus)), units: nanoseconds)
+ * (default: 0.9 msec * (1 + ilog(ncpus)), units: nanoseconds)
  */
-unsigned int sysctl_sched_min_granularity		= 1000000ULL;
-unsigned int normalized_sysctl_sched_min_granularity	= 1000000ULL;
+unsigned int sysctl_sched_min_granularity		= 900000ULL;
+unsigned int normalized_sysctl_sched_min_granularity	= 900000ULL;
 
 /*
  * This value is kept at sysctl_sched_latency/sysctl_sched_min_granularity
@@ -92,21 +92,21 @@ unsigned int sysctl_sched_child_runs_first __read_mostly;
  * and reduces their over-scheduling. Synchronous workloads will still
  * have immediate wakeup/sleep latencies.
  *
- * (default: 1.2 msec * (1 + ilog(ncpus)), units: nanoseconds)
+ * (default: 1 msec * (1 + ilog(ncpus)), units: nanoseconds)
  */
-unsigned int sysctl_sched_wakeup_granularity		= 1200000UL;
-unsigned int normalized_sysctl_sched_wakeup_granularity	= 1200000UL;
+unsigned int sysctl_sched_wakeup_granularity		= 1000000UL;
+unsigned int normalized_sysctl_sched_wakeup_granularity	= 1000000UL;
 
-const_debug unsigned int sysctl_sched_migration_cost	= 500000UL;
+const_debug unsigned int sysctl_sched_migration_cost	= 200000UL;
 
 #ifdef CONFIG_SCHED_BORE
 uint __read_mostly sched_bore                   = 1;
 uint __read_mostly sched_burst_smoothness_long  = 1;
-uint __read_mostly sched_burst_smoothness_short = 1;
-uint __read_mostly sched_burst_fork_atavistic   = 1;
-uint __read_mostly sched_burst_penalty_offset   = 24;
-uint __read_mostly sched_burst_penalty_scale    = 1024;
-uint __read_mostly sched_burst_cache_lifetime   = 30000000;
+uint __read_mostly sched_burst_smoothness_short = 0;
+uint __read_mostly sched_burst_fork_atavistic   = 2;
+uint __read_mostly sched_burst_penalty_offset   = 22;
+uint __read_mostly sched_burst_penalty_scale    = 1152;
+uint __read_mostly sched_burst_cache_lifetime   = 45000000;
 
 #define MAX_BURST_PENALTY (39U << 2)
 
@@ -5394,9 +5394,9 @@ static inline void hrtick_update(struct rq *rq)
 static inline unsigned long cpu_util(int cpu);
 static unsigned long capacity_of(int cpu);
 
-#ifdef CONFIG_MTK_SCHED_EXTENSION
 #define fits_capacity(cap, max) ((cap) * 1280 < (max) * 1024)
 
+#ifdef CONFIG_MTK_SCHED_EXTENSION
 static struct perf_domain *find_pd(struct perf_domain *pd, int cpu)
 {
 	while (pd) {
