@@ -38,10 +38,10 @@
  * (to see the precise effective timeslice length of your workload,
  *  run vmstat and monitor the context-switches (cs) field)
  *
- * (default: 7ms * (1 + ilog(ncpus)), units: nanoseconds)
+ * (default: 6.5ms * (1 + ilog(ncpus)), units: nanoseconds)
  */
-unsigned int sysctl_sched_latency			= 7000000ULL;
-unsigned int normalized_sysctl_sched_latency		= 7000000ULL;
+unsigned int sysctl_sched_latency			= 6500000ULL;
+unsigned int normalized_sysctl_sched_latency		= 6500000ULL;
 
 /*
  * Enable/disable honoring sync flag in energy-aware wakeups.
@@ -69,10 +69,10 @@ enum sched_tunable_scaling sysctl_sched_tunable_scaling = SCHED_TUNABLESCALING_L
 /*
  * Minimal preemption granularity for CPU-bound tasks:
  *
- * (default: 0.9 msec * (1 + ilog(ncpus)), units: nanoseconds)
+ * (default: 0.8 msec * (1 + ilog(ncpus)), units: nanoseconds)
  */
-unsigned int sysctl_sched_min_granularity		= 900000ULL;
-unsigned int normalized_sysctl_sched_min_granularity	= 900000ULL;
+unsigned int sysctl_sched_min_granularity		= 800000ULL;
+unsigned int normalized_sysctl_sched_min_granularity	= 800000ULL;
 
 /*
  * This value is kept at sysctl_sched_latency/sysctl_sched_min_granularity
@@ -92,21 +92,21 @@ unsigned int sysctl_sched_child_runs_first __read_mostly;
  * and reduces their over-scheduling. Synchronous workloads will still
  * have immediate wakeup/sleep latencies.
  *
- * (default: 1 msec * (1 + ilog(ncpus)), units: nanoseconds)
+ * (default: 0.8 msec * (1 + ilog(ncpus)), units: nanoseconds)
  */
-unsigned int sysctl_sched_wakeup_granularity		= 1000000UL;
-unsigned int normalized_sysctl_sched_wakeup_granularity	= 1000000UL;
+unsigned int sysctl_sched_wakeup_granularity		= 800000UL;
+unsigned int normalized_sysctl_sched_wakeup_granularity	= 800000UL;
 
-const_debug unsigned int sysctl_sched_migration_cost	= 200000UL;
+const_debug unsigned int sysctl_sched_migration_cost	= 100000UL;
 
 #ifdef CONFIG_SCHED_BORE
 uint __read_mostly sched_bore                   = 1;
 uint __read_mostly sched_burst_smoothness_long  = 1;
 uint __read_mostly sched_burst_smoothness_short = 0;
-uint __read_mostly sched_burst_fork_atavistic   = 2;
-uint __read_mostly sched_burst_penalty_offset   = 22;
-uint __read_mostly sched_burst_penalty_scale    = 1152;
-uint __read_mostly sched_burst_cache_lifetime   = 45000000;
+uint __read_mostly sched_burst_fork_atavistic   = 1;
+uint __read_mostly sched_burst_penalty_offset   = 26;
+uint __read_mostly sched_burst_penalty_scale    = 896;
+uint __read_mostly sched_burst_cache_lifetime   = 30000000;
 
 #define MAX_BURST_PENALTY (39U << 2)
 
@@ -215,9 +215,9 @@ unsigned int sysctl_sched_cfs_bandwidth_slice		= 5000UL;
  * The margin used when comparing utilization with CPU capacity:
  * util * margin < capacity * 1024
  *
- * (default: ~20%)
+ * (default: ~25%)
  */
-unsigned int capacity_margin				= 1280;
+unsigned int capacity_margin				= 1360;
 
 static inline void update_load_add(struct load_weight *lw, unsigned long inc)
 {
@@ -5394,7 +5394,7 @@ static inline void hrtick_update(struct rq *rq)
 static inline unsigned long cpu_util(int cpu);
 static unsigned long capacity_of(int cpu);
 
-#define fits_capacity(cap, max) ((cap) * 1280 < (max) * 1024)
+#define fits_capacity(cap, max) ((cap) * capacity_margin < (max) * 1024)
 
 #ifdef CONFIG_MTK_SCHED_EXTENSION
 static struct perf_domain *find_pd(struct perf_domain *pd, int cpu)
