@@ -165,17 +165,17 @@ static int __maybe_unused three          = 3;
 static int __maybe_unused sixty_four     = 64;
 static int __maybe_unused maxval_12_bits = 4095;
 #ifdef CONFIG_SCHED_DEBUG
-static unsigned int sched_latency_ns_locked = 7000000;
-static unsigned int sched_min_granularity_ns_locked = 900000;
-static unsigned int sched_wakeup_granularity_ns_locked = 1000000;
-static unsigned int sched_migration_cost_ns_locked = 200000;
+static unsigned int sched_latency_ns_locked = 6500000;
+static unsigned int sched_min_granularity_ns_locked = 800000;
+static unsigned int sched_wakeup_granularity_ns_locked = 800000;
+static unsigned int sched_migration_cost_ns_locked = 100000;
 #endif
 static unsigned int sched_burst_smoothness_long_locked = 1;
 static unsigned int sched_burst_smoothness_short_locked = 0;
-static unsigned int sched_burst_fork_atavistic_locked = 2;
-static unsigned int sched_burst_penalty_offset_locked = 22;
-static unsigned int sched_burst_penalty_scale_locked = 1152;
-static unsigned int sched_burst_cache_lifetime_locked = 45000000;
+static unsigned int sched_burst_fork_atavistic_locked = 1;
+static unsigned int sched_burst_penalty_offset_locked = 26;
+static unsigned int sched_burst_penalty_scale_locked = 896;
+static unsigned int sched_burst_cache_lifetime_locked = 30000000;
 #endif // CONFIG_SCHED_BORE
 
 /*
