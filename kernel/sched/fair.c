@@ -135,9 +135,9 @@ unsigned int sysctl_sched_cfs_bandwidth_slice		= 5000UL;
  * The margin used when comparing utilization with CPU capacity:
  * util * margin < capacity * 1024
  *
- * (default: ~20%)
+ * (default: ~25%)
  */
-unsigned int capacity_margin				= 1280;
+unsigned int capacity_margin				= 1360;
 
 static inline void update_load_add(struct load_weight *lw, unsigned long inc)
 {
@@ -5309,9 +5309,9 @@ static inline void hrtick_update(struct rq *rq)
 static inline unsigned long cpu_util(int cpu);
 static unsigned long capacity_of(int cpu);
 
-#ifdef CONFIG_MTK_SCHED_EXTENSION
-#define fits_capacity(cap, max) ((cap) * 1280 < (max) * 1024)
+#define fits_capacity(cap, max) ((cap) * capacity_margin < (max) * 1024)
 
+#ifdef CONFIG_MTK_SCHED_EXTENSION
 static struct perf_domain *find_pd(struct perf_domain *pd, int cpu)
 {
 	while (pd) {
