@@ -89,12 +89,12 @@ unsigned int sysctl_sched_child_runs_first __read_mostly;
  * and reduces their over-scheduling. Synchronous workloads will still
  * have immediate wakeup/sleep latencies.
  *
- * (default: 1 msec * (1 + ilog(ncpus)), units: nanoseconds)
+ * (default: 1.2 msec * (1 + ilog(ncpus)), units: nanoseconds)
  */
-unsigned int sysctl_sched_wakeup_granularity		= 1000000UL;
-unsigned int normalized_sysctl_sched_wakeup_granularity	= 1000000UL;
+unsigned int sysctl_sched_wakeup_granularity		= 1200000UL;
+unsigned int normalized_sysctl_sched_wakeup_granularity	= 1200000UL;
 
-const_debug unsigned int sysctl_sched_migration_cost	= 0UL;
+const_debug unsigned int sysctl_sched_migration_cost	= 150000UL;
 
 /*
  * Remove and clamp on negative, from a local variable.
@@ -135,9 +135,9 @@ unsigned int sysctl_sched_cfs_bandwidth_slice		= 5000UL;
  * The margin used when comparing utilization with CPU capacity:
  * util * margin < capacity * 1024
  *
- * (default: ~20%)
+ * (default: ~22%)
  */
-unsigned int capacity_margin				= 1280;
+unsigned int capacity_margin				= 1248;
 
 static inline void update_load_add(struct load_weight *lw, unsigned long inc)
 {
