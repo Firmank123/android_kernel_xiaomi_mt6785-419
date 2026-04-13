@@ -334,13 +334,18 @@ static struct ctl_table sysctl_base_table[] = {
 };
 
 #ifdef CONFIG_SCHED_DEBUG
-static int min_sched_granularity_ns = 100000;		/* 100 usecs */
-static int max_sched_granularity_ns = NSEC_PER_SEC;	/* 1 second */
-static int min_wakeup_granularity_ns;			/* 0 usecs */
-static int max_wakeup_granularity_ns = NSEC_PER_SEC;	/* 1 second */
+/* Lock scheduler tunables to keep runtime behavior stable. */
+static int min_sched_granularity_ns = 750000;		/* 0.75 msec */
+static int max_sched_granularity_ns = 750000;		/* 0.75 msec */
+static int min_sched_latency_ns = 6000000;		/* 6 msec */
+static int max_sched_latency_ns = 6000000;		/* 6 msec */
+static int min_wakeup_granularity_ns = 1200000;	/* 1.2 msec */
+static int max_wakeup_granularity_ns = 1200000;	/* 1.2 msec */
 #ifdef CONFIG_SMP
-static int min_sched_tunable_scaling = SCHED_TUNABLESCALING_NONE;
-static int max_sched_tunable_scaling = SCHED_TUNABLESCALING_END-1;
+static int min_sched_tunable_scaling = SCHED_TUNABLESCALING_LOG;
+static int max_sched_tunable_scaling = SCHED_TUNABLESCALING_LOG;
+static int min_sched_migration_cost_ns = 150000;	/* 150 usecs */
+static int max_sched_migration_cost_ns = 150000;	/* 150 usecs */
 #endif /* CONFIG_SMP */
 #endif /* CONFIG_SCHED_DEBUG */
 
@@ -414,8 +419,8 @@ static struct ctl_table kern_table[] = {
 		.maxlen		= sizeof(unsigned int),
 		.mode		= 0644,
 		.proc_handler	= sched_proc_update_handler,
-		.extra1		= &min_sched_granularity_ns,
-		.extra2		= &max_sched_granularity_ns,
+		.extra1		= &min_sched_latency_ns,
+		.extra2		= &max_sched_latency_ns,
 	},
 	{
 		.procname	= "sched_sync_hint_enable",
@@ -448,7 +453,9 @@ static struct ctl_table kern_table[] = {
 		.data		= &sysctl_sched_migration_cost,
 		.maxlen		= sizeof(unsigned int),
 		.mode		= 0644,
-		.proc_handler	= proc_dointvec,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &min_sched_migration_cost_ns,
+		.extra2		= &max_sched_migration_cost_ns,
 	},
 	{
 		.procname	= "sched_nr_migrate",
