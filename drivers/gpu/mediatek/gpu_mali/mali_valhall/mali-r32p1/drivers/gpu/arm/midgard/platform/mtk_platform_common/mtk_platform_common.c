@@ -55,12 +55,27 @@ void mtk_common_pm_mfg_idle(void)
 	mutex_unlock(&mfg_pm_lock);
 }
 
+int mtk_common_gpufreq_bringup(void)
+{
+#if defined(CONFIG_MACH_MT6768) || defined(CONFIG_MACH_MT6785)
+	return 0;
+#else
+	static int bringup = -1;
+
+	if (bringup == -1)
+		bringup = mt_gpufreq_bringup();
+
+	return bringup;
+#endif
+}
+
 int mtk_common_gpufreq_commit(int opp_idx)
 {
 	int ret = -1;
 
 	mutex_lock(&mfg_pm_lock);
-	if (opp_idx >= 0 && mtk_common_pm_is_mfg_active()) {
+	if (opp_idx >= 0 && mtk_common_pm_is_mfg_active() &&
+	    !mtk_common_gpufreq_bringup()) {
     #if defined(CONFIG_MACH_MT6768) || defined(CONFIG_MACH_MT6785)
 		ret = mt_gpufreq_target(opp_idx, false);
 	#else

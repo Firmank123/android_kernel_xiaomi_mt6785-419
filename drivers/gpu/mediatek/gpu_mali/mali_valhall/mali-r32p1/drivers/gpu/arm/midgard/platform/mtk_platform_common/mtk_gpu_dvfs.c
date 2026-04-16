@@ -94,10 +94,16 @@ void mtk_common_cal_gpu_utilization(unsigned int *pui32Loading,
 
 #if IS_ENABLED(GED_ENABLE_DVFS_LOADING_MODE)
 	util_ex->util_active = utilisation;
+#if IS_ENABLED(CONFIG_MALI_MTK_DVFS_POLICY)
 	util_ex->util_3d = (100 * diff->busy_gl_plus[0]) /
 			max(diff->time_busy + diff->time_idle, 1u);
 	util_ex->util_ta = (100 * (diff->busy_gl_plus[1]+diff->busy_gl_plus[2])) /
 			max(diff->time_busy + diff->time_idle, 1u);
+#else
+	util_ex->util_3d = (100 * diff->busy_gl) /
+			max(diff->time_busy + diff->time_idle, 1u);
+	util_ex->util_ta = 0;
+#endif
 	util_ex->util_compute = (100 * (diff->busy_cl[0]+diff->busy_cl[1])) /
 			max(diff->time_busy + diff->time_idle, 1u);
 #endif
@@ -116,10 +122,16 @@ void mtk_common_cal_gpu_utilization(unsigned int *pui32Loading,
 		util_cl_share[1] = 0;
 	} else {
 		current_util_active = utilisation;
+#if IS_ENABLED(CONFIG_MALI_MTK_DVFS_POLICY)
 		current_util_3d = (100 * diff->busy_gl_plus[0]) /
 				max(diff->time_busy + diff->time_idle, 1u);
 		current_util_ta = (100 * (diff->busy_gl_plus[1]+diff->busy_gl_plus[2])) /
 				max(diff->time_busy + diff->time_idle, 1u);
+#else
+		current_util_3d = (100 * diff->busy_gl) /
+				max(diff->time_busy + diff->time_idle, 1u);
+		current_util_ta = 0;
+#endif
 		current_util_compute = (100 * (diff->busy_cl[0]+diff->busy_cl[1])) /
 				max(diff->time_busy + diff->time_idle, 1u);
 	}

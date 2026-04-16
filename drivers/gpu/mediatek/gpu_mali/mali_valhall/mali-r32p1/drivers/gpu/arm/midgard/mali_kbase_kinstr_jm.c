@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
+// SPDX-License-Identifier: GPL-2.0
 /*
  *
  * (C) COPYRIGHT 2019-2021 ARM Limited. All rights reserved.
@@ -47,7 +47,7 @@
 #include <linux/version.h>
 #include <linux/wait.h>
 
-#if KERNEL_VERSION(4, 19, 0) <= LINUX_VERSION_CODE
+#if KERNEL_VERSION(5, 1, 0) <= LINUX_VERSION_CODE
 #include <linux/build_bug.h>
 #else
 // Stringify the expression if no message is given.

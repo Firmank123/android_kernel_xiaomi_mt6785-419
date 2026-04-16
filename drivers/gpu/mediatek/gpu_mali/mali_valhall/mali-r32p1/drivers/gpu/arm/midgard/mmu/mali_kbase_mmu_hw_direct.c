@@ -1,7 +1,7 @@
-// SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
+// SPDX-License-Identifier: GPL-2.0
 /*
  *
- * (C) COPYRIGHT 2014-2023 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2014-2021 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -35,87 +35,47 @@
  * The lockaddr value is a combination of the starting address and
  * the size of the region that encompasses all the memory pages to lock.
  *
- * Bits 5:0 are used to represent the size, which must be a power of 2.
- * The smallest amount of memory to be locked corresponds to 32 kB,
- * i.e. 8 memory pages, because a MMU cache line is made of 64 bytes
- * and every page table entry is 8 bytes. Therefore it is not possible
- * to lock less than 8 memory pages at a time.
- *
- * The size is expressed as a logarithm minus one:
- * - A value of 14 is thus interpreted as log(32 kB) = 15, where 32 kB
- *   is the smallest possible size.
- * - Likewise, a value of 47 is interpreted as log(256 TB) = 48, where 256 TB
- *   is the largest possible size (implementation defined value according
- *   to the HW spec).
- *
- * Bits 11:6 are reserved.
- *
- * Bits 63:12 are used to represent the base address of the region to lock.
- * Only the upper bits of the address are used; lowest bits are cleared
- * to avoid confusion.
- *
- * The address is aligned to a multiple of the region size. This has profound
- * implications on the region size itself: often the MMU will lock a region
- * larger than the given number of pages, because the lock region cannot start
- * from any arbitrary address.
+ * The size is expressed as a logarithm: it is represented in a way
+ * that is compatible with the HW specification and it also determines
+ * how many of the lowest bits of the address are cleared.
  *
  * Return: 0 if success, or an error code on failure.
  */
 static int lock_region(u64 pfn, u32 num_pages, u64 *lockaddr)
 {
 	const u64 lockaddr_base = pfn << PAGE_SHIFT;
-	const u64 lockaddr_end = ((pfn + num_pages) << PAGE_SHIFT) - 1;
-	u64 lockaddr_size_log2;
+	u64 lockaddr_size_log2, region_frame_number_start,
+		region_frame_number_end;
 
 	if (num_pages == 0)
 		return -EINVAL;
 
-	/* The MMU lock region is a self-aligned region whose size
-	 * is a power of 2 and that contains both start and end
-	 * of the address range determined by pfn and num_pages.
-	 * The size of the MMU lock region can be defined as the
-	 * largest divisor that yields the same result when both
-	 * start and end addresses are divided by it.
-	 *
-	 * For instance: pfn=0x4F000 num_pages=2 describe the
-	 * address range between 0x4F000 and 0x50FFF. It is only
-	 * 2 memory pages. However there isn't a single lock region
-	 * of 8 kB that encompasses both addresses because 0x4F000
-	 * would fall into the [0x4E000, 0x4FFFF] region while
-	 * 0x50000 would fall into the [0x50000, 0x51FFF] region.
-	 * The minimum lock region size that includes the entire
-	 * address range is 128 kB, and the region would be
-	 * [0x40000, 0x5FFFF].
-	 *
-	 * The region size can be found by comparing the desired
-	 * start and end addresses and finding the highest bit
-	 * that differs. The smallest naturally aligned region
-	 * must include this bit change, hence the desired region
-	 * starts with this bit (and subsequent bits) set to 0
-	 * and ends with the bit (and subsequent bits) set to 1.
-	 *
-	 * In the example above: 0x4F000 ^ 0x50FFF = 0x1FFFF
-	 * therefore the highest bit that differs is bit #16
-	 * and the region size (as a logarithm) is 16 + 1 = 17, i.e. 128 kB.
+	/* The size is expressed as a logarithm and should take into account
+	 * the possibility that some pages might spill into the next region.
 	 */
-	lockaddr_size_log2 = fls64(lockaddr_base ^ lockaddr_end);
+	lockaddr_size_log2 = fls(num_pages) + PAGE_SHIFT - 1;
 
-	/* Cap the size against minimum and maximum values allowed. */
+	/* Round up if the number of pages is not a power of 2. */
+	if (num_pages != ((u32)1 << (lockaddr_size_log2 - PAGE_SHIFT)))
+		lockaddr_size_log2 += 1;
+
+	/* Round up if some memory pages spill into the next region. */
+	region_frame_number_start = pfn >> (lockaddr_size_log2 - PAGE_SHIFT);
+	region_frame_number_end =
+	    (pfn + num_pages - 1) >> (lockaddr_size_log2 - PAGE_SHIFT);
+
+	if (region_frame_number_start < region_frame_number_end)
+		lockaddr_size_log2 += 1;
+
+	/* Represent the size according to the HW specification. */
+	lockaddr_size_log2 = MAX(lockaddr_size_log2,
+		KBASE_LOCK_REGION_MIN_SIZE_LOG2);
+
 	if (lockaddr_size_log2 > KBASE_LOCK_REGION_MAX_SIZE_LOG2)
 		return -EINVAL;
 
-	lockaddr_size_log2 =
-		MAX(lockaddr_size_log2, KBASE_LOCK_REGION_MIN_SIZE_LOG2);
-
-	/* Represent the result in a way that is compatible with HW spec.
-	 *
-	 * Upper bits are used for the base address, whose lower bits
-	 * are cleared to avoid confusion because they are going to be ignored
-	 * by the MMU anyway, since lock regions shall be aligned with
-	 * a multiple of their size and cannot start from any address.
-	 *
-	 * Lower bits are used for the size, which is represented as
-	 * logarithm minus one of the actual size.
+	/* The lowest bits are cleared and then set to size - 1 to represent
+	 * the size in a way that is compatible with the HW specification.
 	 */
 	*lockaddr = lockaddr_base & ~((1ull << lockaddr_size_log2) - 1);
 	*lockaddr |= lockaddr_size_log2 - 1;
@@ -127,18 +87,22 @@ static int wait_ready(struct kbase_device *kbdev,
 		unsigned int as_nr)
 {
 	unsigned int max_loops = KBASE_AS_INACTIVE_MAX_LOOPS;
+	u32 val = kbase_reg_read(kbdev, MMU_AS_REG(as_nr, AS_STATUS));
 
-	/* Wait for the MMU status to indicate there is no active command. */
-	while (--max_loops &&
-	       kbase_reg_read(kbdev, MMU_AS_REG(as_nr, AS_STATUS)) &
-		       AS_STATUS_AS_ACTIVE) {
-		;
-	}
+	/* Wait for the MMU status to indicate there is no active command, in
+	 * case one is pending. Do not log remaining register accesses.
+	 */
+	while (--max_loops && (val & AS_STATUS_AS_ACTIVE))
+		val = kbase_reg_read(kbdev, MMU_AS_REG(as_nr, AS_STATUS));
 
 	if (max_loops == 0) {
 		dev_err(kbdev->dev, "AS_ACTIVE bit stuck, might be caused by slow/unstable GPU clock or possible faulty FPGA connector\n");
 		return -1;
 	}
+
+	/* If waiting in loop was performed, log last read value. */
+	if (KBASE_AS_INACTIVE_MAX_LOOPS - 1 > max_loops)
+		kbase_reg_read(kbdev, MMU_AS_REG(as_nr, AS_STATUS));
 
 	return 0;
 }
@@ -205,14 +169,20 @@ void kbase_mmu_hw_configure(struct kbase_device *kbdev, struct kbase_as *as)
 	write_cmd(kbdev, as->number, AS_COMMAND_UPDATE);
 }
 
-static int mmu_hw_lock_op_no_wait(struct kbase_device *kbdev,
-				  struct kbase_as *as, u64 vpfn, u32 nr,
-				  bool op_lock)
+int kbase_mmu_hw_do_operation(struct kbase_device *kbdev, struct kbase_as *as,
+		u64 vpfn, u32 nr, u32 op,
+		unsigned int handling_irq)
 {
 	int ret;
-	u64 lock_addr = 0;
 
-	if (op_lock) {
+	lockdep_assert_held(&kbdev->mmu_hw_mutex);
+
+	if (op == AS_COMMAND_UNLOCK) {
+		/* Unlock doesn't require a lock first */
+		ret = write_cmd(kbdev, as->number, AS_COMMAND_UNLOCK);
+	} else {
+		u64 lock_addr;
+
 		ret = lock_region(vpfn, nr, &lock_addr);
 
 		if (!ret) {
@@ -223,52 +193,15 @@ static int mmu_hw_lock_op_no_wait(struct kbase_device *kbdev,
 			kbase_reg_write(kbdev,
 				MMU_AS_REG(as->number, AS_LOCKADDR_HI),
 				(lock_addr >> 32) & 0xFFFFFFFFUL);
-			ret = write_cmd(kbdev, as->number, AS_COMMAND_LOCK);
-		}
-	} else {
-		/* Unlock doesn't require a lock first */
-		ret = write_cmd(kbdev, as->number, AS_COMMAND_UNLOCK);
-	}
+			write_cmd(kbdev, as->number, AS_COMMAND_LOCK);
 
-	return ret;
-}
-
-int kbase_mmu_hw_do_operation(struct kbase_device *kbdev, struct kbase_as *as,
-			      u64 vpfn, u32 nr, u32 op,
-			      unsigned int handling_irq)
-{
-	int ret;
-
-	lockdep_assert_held(&kbdev->mmu_hw_mutex);
-
-	if (op == AS_COMMAND_UNLOCK) {
-		ret = mmu_hw_lock_op_no_wait(kbdev, as, vpfn, nr, false);
-	} else {
-		ret = mmu_hw_lock_op_no_wait(kbdev, as, vpfn, nr, true);
-
-		if (!ret) {
-			/* Lock succeeded, run the MMU operation */
+			/* Run the MMU operation */
 			write_cmd(kbdev, as->number, op);
 
 			/* Wait for the flush to complete */
 			ret = wait_ready(kbdev, as->number);
 		}
 	}
-
-	return ret;
-}
-
-int kbase_mmu_hw_do_lock_op(struct kbase_device *kbdev, struct kbase_as *as,
-			    u64 vpfn, u32 nr, bool op_lock)
-{
-	int ret;
-
-	lockdep_assert_held(&kbdev->hwaccess_lock);
-
-	ret = mmu_hw_lock_op_no_wait(kbdev, as, vpfn, nr, op_lock);
-
-	if (!ret)
-		ret = wait_ready(kbdev, as->number);
 
 	return ret;
 }
