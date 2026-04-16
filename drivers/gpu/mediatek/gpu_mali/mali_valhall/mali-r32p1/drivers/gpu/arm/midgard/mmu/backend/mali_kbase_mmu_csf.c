@@ -29,10 +29,6 @@
 #include <mali_kbase_reset_gpu.h>
 #include <mali_kbase_as_fault_debugfs.h>
 #include <mmu/mali_kbase_mmu_internal.h>
-#if IS_ENABLED(CONFIG_MALI_MTK_DEBUG)
-#include <mtk_gpufreq.h>
-#include "platform/mtk_platform_common.h"
-#endif
 
 void kbase_mmu_get_as_setup(struct kbase_mmu_table *mmut,
 		struct kbase_mmu_setup * const setup)
@@ -134,6 +130,7 @@ void kbase_mmu_report_mcu_as_fault_and_reset(struct kbase_device *kbdev,
 	if (kbase_prepare_to_reset_gpu(kbdev,
 				       RESET_FLAGS_HWC_UNRECOVERABLE_ERROR))
 		kbase_reset_gpu(kbdev);
+
 }
 KBASE_EXPORT_TEST_API(kbase_mmu_report_mcu_as_fault_and_reset);
 
@@ -220,16 +217,6 @@ void kbase_mmu_report_fault_and_kill(struct kbase_context *kctx,
 	exception_type = AS_FAULTSTATUS_EXCEPTION_TYPE_GET(status);
 	access_type = AS_FAULTSTATUS_ACCESS_TYPE_GET(status);
 	source_id = AS_FAULTSTATUS_SOURCE_ID_GET(status);
-
-#if IS_ENABLED(CONFIG_MALI_MTK_DEBUG)
-	if (!mtk_common_gpufreq_bringup()) {
-#if defined(CONFIG_MTK_GPUFREQ_V2)
-		gpufreq_dump_infra_status();
-#else
-		mt_gpufreq_dump_infra_status();
-#endif /* CONFIG_MTK_GPUFREQ_V2 */
-	}
-#endif
 
 	/* terminal fault, print info about the fault */
 	dev_err(kbdev->dev,
@@ -496,8 +483,6 @@ static void kbase_mmu_gpu_fault_worker(struct work_struct *data)
 	kbase_csf_ctx_handle_fault(kctx, fault);
 	kbase_ctx_sched_release_ctx_lock(kctx);
 
-	atomic_dec(&kbdev->faults_pending);
-
 	/* A work for GPU fault is complete.
 	 * Till reaching here, no further GPU fault will be reported.
 	 * Now clear the GPU fault to allow next GPU fault interrupt report.
@@ -506,6 +491,8 @@ static void kbase_mmu_gpu_fault_worker(struct work_struct *data)
 	kbase_reg_write(kbdev, GPU_CONTROL_REG(GPU_COMMAND),
 			GPU_COMMAND_CLEAR_FAULT);
 	spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
+
+	atomic_dec(&kbdev->faults_pending);
 }
 
 /**

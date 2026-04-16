@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
  * (C) COPYRIGHT 2019-2021 ARM Limited. All rights reserved.
@@ -29,10 +29,6 @@
 #include <device/mali_kbase_device.h>
 #include <mali_kbase_as_fault_debugfs.h>
 #include <mmu/mali_kbase_mmu_internal.h>
-#if IS_ENABLED(CONFIG_MALI_MTK_DEBUG)
-#include <mtk_gpufreq.h>
-#include "platform/mtk_platform_common.h"
-#endif
 
 void kbase_mmu_get_as_setup(struct kbase_mmu_table *mmut,
 		struct kbase_mmu_setup * const setup)
@@ -129,16 +125,6 @@ void kbase_mmu_report_fault_and_kill(struct kbase_context *kctx,
 	access_type = (fault->status >> 8) & 0x3;
 	source_id = (fault->status >> 16);
 
-#if IS_ENABLED(CONFIG_MALI_MTK_DEBUG)
-	if (!mtk_common_gpufreq_bringup()) {
-#if defined(CONFIG_MTK_GPUFREQ_V2)
-		gpufreq_dump_infra_status();
-#else
-		mt_gpufreq_dump_infra_status();
-#endif /* CONFIG_MTK_GPUFREQ_V2 */
-	}
-#endif
-
 	/* terminal fault, print info about the fault */
 	dev_err(kbdev->dev,
 		"Unhandled Page fault in AS%d at VA 0x%016llX\n"
@@ -199,6 +185,7 @@ void kbase_mmu_report_fault_and_kill(struct kbase_context *kctx,
 			KBASE_MMU_FAULT_TYPE_PAGE_UNEXPECTED);
 	kbase_mmu_hw_enable_fault(kbdev, as,
 			KBASE_MMU_FAULT_TYPE_PAGE_UNEXPECTED);
+
 }
 
 /**
@@ -254,13 +241,13 @@ static void kbase_mmu_interrupt_process(struct kbase_device *kbdev,
 		 * hw counters dumping in progress, signal the
 		 * other thread that it failed
 		 */
-  		spin_lock_irqsave(&kbdev->hwcnt.lock, flags);
+		spin_lock_irqsave(&kbdev->hwcnt.lock, flags);
 		if ((kbdev->hwcnt.kctx == kctx) &&
 		    (kbdev->hwcnt.backend.state ==
 					KBASE_INSTR_STATE_DUMPING))
-			kbdev->hwcnt.backend.state =
-						KBASE_INSTR_STATE_FAULT;
-  		spin_unlock_irqrestore(&kbdev->hwcnt.lock, flags);
+			kbdev->hwcnt.backend.state = KBASE_INSTR_STATE_FAULT;
+
+		spin_unlock_irqrestore(&kbdev->hwcnt.lock, flags);
 
 		/*
 		 * Stop the kctx from submitting more jobs and cause it

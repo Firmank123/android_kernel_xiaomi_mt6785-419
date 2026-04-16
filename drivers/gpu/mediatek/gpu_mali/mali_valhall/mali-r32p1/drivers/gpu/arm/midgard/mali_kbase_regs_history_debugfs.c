@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
  * (C) COPYRIGHT 2014, 2016, 2019-2021 ARM Limited. All rights reserved.
@@ -231,39 +231,14 @@ static const struct file_operations regs_history_fops = {
 
 void kbasep_regs_history_debugfs_init(struct kbase_device *kbdev)
 {
-	debugfs_create_bool("regs_history_enabled", S_IRUGO | S_IWUSR,
+	debugfs_create_bool("regs_history_enabled", 0644,
 			kbdev->mali_debugfs_directory,
 			&kbdev->io_history.enabled);
-	debugfs_create_file("regs_history_size", S_IRUGO | S_IWUSR,
+	debugfs_create_file("regs_history_size", 0644,
 			kbdev->mali_debugfs_directory,
 			&kbdev->io_history, &regs_history_size_fops);
-	debugfs_create_file("regs_history", S_IRUGO,
+	debugfs_create_file("regs_history", 0444,
 			kbdev->mali_debugfs_directory, &kbdev->io_history,
 			&regs_history_fops);
 }
-#else
-// MTK: add to prevent build fail
-int kbase_io_history_init(struct kbase_io_history *h, u16 n)
-{
-	(void)h;
-	(void)n;
-
-	return 0;
-};
-
-void kbase_io_history_term(struct kbase_io_history *h)
-{
-	(void)h;
-};
-
-void kbase_io_history_dump(struct kbase_device *kbdev)
-{
-	(void)kbdev;
-};
-
-void kbasep_regs_history_debugfs_init(struct kbase_device *kbdev)
-{
-	(void)kbdev;
-};
-
 #endif /* defined(CONFIG_DEBUG_FS) && !IS_ENABLED(CONFIG_MALI_NO_MALI) */

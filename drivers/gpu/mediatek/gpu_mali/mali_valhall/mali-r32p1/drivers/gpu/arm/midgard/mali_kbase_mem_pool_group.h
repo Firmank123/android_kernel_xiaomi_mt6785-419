@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
  * (C) COPYRIGHT 2019-2021 ARM Limited. All rights reserved.
@@ -23,6 +23,30 @@
 #define _KBASE_MEM_POOL_GROUP_H_
 
 #include <mali_kbase_defs.h>
+
+/**
+ * kbase_mem_pool_group_select() - Select the memory pool to use.
+ *
+ * @kbdev:         Device pointer.
+ * @mem_group_id:  Physical memory group ID to use.
+ * @is_small_page: Flag used to select between the small and
+ *                 large memory pool.
+ *
+ * Return: A pointer to the selected memory pool.
+ */
+static inline struct kbase_mem_pool *kbase_mem_pool_group_select(
+	struct kbase_device *kbdev, u32 mem_group_id, bool is_small_page)
+{
+	if (WARN_ON(unlikely(kbdev == NULL)))
+		return NULL;
+
+	WARN_ON(mem_group_id > BASE_MEM_GROUP_COUNT);
+
+	if (is_small_page)
+		return &kbdev->mem_pools.small[mem_group_id];
+
+	return &kbdev->mem_pools.large[mem_group_id];
+}
 
 /**
  * kbase_mem_pool_group_config_init - Set the initial configuration for a

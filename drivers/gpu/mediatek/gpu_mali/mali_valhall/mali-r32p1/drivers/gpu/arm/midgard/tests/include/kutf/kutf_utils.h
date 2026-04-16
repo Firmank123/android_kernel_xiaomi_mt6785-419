@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
  * (C) COPYRIGHT 2014, 2017, 2020-2021 ARM Limited. All rights reserved.
@@ -54,6 +54,7 @@
  * Return: Returns pointer to allocated string, or NULL on error.
  */
 const char *kutf_dsprintf(struct kutf_mempool *pool,
-		const char *fmt, ...);
+		const char *fmt, ...) __printf(2, 3);
+
 
 #endif	/* _KERNEL_UTF_UTILS_H_ */

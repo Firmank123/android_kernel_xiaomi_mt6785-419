@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
  * (C) COPYRIGHT 2012-2017, 2019-2021 ARM Limited. All rights reserved.
@@ -84,9 +84,9 @@ int kbasep_mem_profile_debugfs_insert(struct kbase_context *kctx, char *data,
 	if (!kbase_ctx_flag(kctx, KCTX_MEM_PROFILE_INITIALIZED)) {
 		if (IS_ERR_OR_NULL(kctx->kctx_dentry)) {
 			err  = -ENOMEM;
-		} else if (!debugfs_create_file("mem_profile", mode,
-					kctx->kctx_dentry, kctx,
-					&kbasep_mem_profile_debugfs_fops)) {
+		} else if (IS_ERR_OR_NULL(debugfs_create_file("mem_profile",
+					mode, kctx->kctx_dentry, kctx,
+					&kbasep_mem_profile_debugfs_fops))) {
 			err = -EAGAIN;
 		} else {
 			kbase_ctx_flag_set(kctx,

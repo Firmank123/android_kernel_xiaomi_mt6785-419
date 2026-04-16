@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
  * (C) COPYRIGHT 2010-2018, 2020-2021 ARM Limited. All rights reserved.
@@ -41,12 +41,12 @@ extern const struct dma_fence_ops kbase_fence_ops;
 #endif
 
 /**
-* struct kbase_fence_cb - Mali dma-fence callback data struct
-* @fence_cb: Callback function
-* @katom:    Pointer to katom that is waiting on this callback
-* @fence:    Pointer to the fence object on which this callback is waiting
-* @node:     List head for linking this callback to the katom
-*/
+ * struct kbase_fence_cb - Mali dma-fence callback data struct
+ * @fence_cb: Callback function
+ * @katom:    Pointer to katom that is waiting on this callback
+ * @fence:    Pointer to the fence object on which this callback is waiting
+ * @node:     List head for linking this callback to the katom
+ */
 struct kbase_fence_cb {
 #if (KERNEL_VERSION(4, 10, 0) > LINUX_VERSION_CODE)
 	struct fence_cb fence_cb;

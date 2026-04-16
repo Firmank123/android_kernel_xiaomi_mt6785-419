@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
  * (C) COPYRIGHT 2018-2021 ARM Limited. All rights reserved.
@@ -117,6 +117,8 @@ struct kbase_kcpu_command_cqs_set_operation_info {
  * @signaled:	Bit array used to report the status of the CQS wait objects.
  *              1 is signaled, 0 otherwise.
  * @nr_objs:	Number of CQS objects in the array.
+ * @inherit_err_flags: Bit-pattern for CQSs in the array who's error field is to
+ *                     be used as the source to import into the queue's error-state
  */
 struct kbase_kcpu_command_cqs_wait_operation_info {
 	struct base_cqs_wait_operation_info *objs;
@@ -194,13 +196,6 @@ struct kbase_kcpu_command_group_suspend_info {
 	u8 group_handle;
 };
 
-#if MALI_UNIT_TEST
-struct kbase_kcpu_command_sample_time_info {
-	u64 page_addr;
-	u64 page_offset;
-	struct page **page;
-};
-#endif /* MALI_UNIT_TEST */
 
 /**
  * struct kbase_cpu_command - Command which is to be part of the kernel
@@ -233,9 +228,6 @@ struct kbase_kcpu_command {
 		struct kbase_kcpu_command_jit_alloc_info jit_alloc;
 		struct kbase_kcpu_command_jit_free_info jit_free;
 		struct kbase_kcpu_command_group_suspend_info suspend_buf_copy;
-#if MALI_UNIT_TEST
-		struct kbase_kcpu_command_sample_time_info sample_time;
-#endif /* MALI_UNIT_TEST */
 	} info;
 };
 
@@ -302,6 +294,8 @@ struct kbase_kcpu_command_queue {
  *		queue will be created.
  * @newq:	Pointer to the structure which contains information about
  *		the new KCPU command queue to be created.
+ *
+ * Return: 0 if successful or a negative error code on failure.
  */
 int kbase_csf_kcpu_queue_new(struct kbase_context *kctx,
 			 struct kbase_ioctl_kcpu_queue_new *newq);
@@ -315,6 +309,8 @@ int kbase_csf_kcpu_queue_new(struct kbase_context *kctx,
  *		queue is to be deleted.
  * @del:	Pointer to the structure which specifies the KCPU command
  *		queue to be deleted.
+ *
+ * Return: 0 if successful or a negative error code on failure.
  */
 int kbase_csf_kcpu_queue_delete(struct kbase_context *kctx,
 			    struct kbase_ioctl_kcpu_queue_delete *del);
@@ -328,6 +324,8 @@ int kbase_csf_kcpu_queue_delete(struct kbase_context *kctx,
  * @enq:	Pointer to the structure which specifies the KCPU command
  *		as well as the KCPU command queue into which the command
  *		is to be enqueued.
+ *
+ * Return: 0 if successful or a negative error code on failure.
  */
 int kbase_csf_kcpu_queue_enqueue(struct kbase_context *kctx,
 				 struct kbase_ioctl_kcpu_queue_enqueue *enq);
@@ -345,11 +343,11 @@ int kbase_csf_kcpu_queue_context_init(struct kbase_context *kctx);
 /**
  * kbase_csf_kcpu_queue_context_term - Terminate the kernel CPU queues context
  *                                     for a GPU address space
+ * @kctx: Pointer to the kbase context being terminated.
  *
  * This function deletes any kernel CPU queues that weren't deleted before
  * context termination.
  *
- * @kctx: Pointer to the kbase context being terminated.
  */
 void kbase_csf_kcpu_queue_context_term(struct kbase_context *kctx);
 

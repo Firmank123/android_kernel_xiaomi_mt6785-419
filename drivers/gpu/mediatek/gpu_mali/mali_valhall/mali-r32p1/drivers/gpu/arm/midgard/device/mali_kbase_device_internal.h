@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
  * (C) COPYRIGHT 2019-2021 ARM Limited. All rights reserved.
@@ -38,6 +38,9 @@ struct kbase_device_init {
 
 int kbase_device_vinstr_init(struct kbase_device *kbdev);
 void kbase_device_vinstr_term(struct kbase_device *kbdev);
+
+int kbase_device_kinstr_prfcnt_init(struct kbase_device *kbdev);
+void kbase_device_kinstr_prfcnt_term(struct kbase_device *kbdev);
 
 int kbase_device_timeline_init(struct kbase_device *kbdev);
 void kbase_device_timeline_term(struct kbase_device *kbdev);

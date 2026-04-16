@@ -1,7 +1,7 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2019-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2019-2022 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -68,6 +68,8 @@
  */
 #define BASEP_MEM_NO_USER_FREE ((base_mem_alloc_flags)1 << 7)
 
+/* Used as BASE_MEM_FIXED in other backends
+ */
 #define BASE_MEM_RESERVED_BIT_8 ((base_mem_alloc_flags)1 << 8)
 
 /* Grow backing store on GPU Page Fault
@@ -192,15 +194,15 @@
 #define BASE_MEM_FLAGS_RESERVED \
 	(BASE_MEM_RESERVED_BIT_8 | BASE_MEM_RESERVED_BIT_19)
 
-#define BASEP_MEM_INVALID_HANDLE               (0ull  << 12)
-#define BASE_MEM_MMU_DUMP_HANDLE               (1ull  << 12)
-#define BASE_MEM_TRACE_BUFFER_HANDLE           (2ull  << 12)
-#define BASE_MEM_MAP_TRACKING_HANDLE           (3ull  << 12)
-#define BASEP_MEM_WRITE_ALLOC_PAGES_HANDLE     (4ull  << 12)
+#define BASEP_MEM_INVALID_HANDLE (0ul)
+#define BASE_MEM_MMU_DUMP_HANDLE (1ul << LOCAL_PAGE_SHIFT)
+#define BASE_MEM_TRACE_BUFFER_HANDLE (2ul << LOCAL_PAGE_SHIFT)
+#define BASE_MEM_MAP_TRACKING_HANDLE (3ul << LOCAL_PAGE_SHIFT)
+#define BASEP_MEM_WRITE_ALLOC_PAGES_HANDLE (4ul << LOCAL_PAGE_SHIFT)
 /* reserved handles ..-47<<PAGE_SHIFT> for future special handles */
-#define BASE_MEM_COOKIE_BASE                   (64ul  << 12)
-#define BASE_MEM_FIRST_FREE_ADDRESS            ((BITS_PER_LONG << 12) + \
-						BASE_MEM_COOKIE_BASE)
+#define BASE_MEM_COOKIE_BASE (64ul << LOCAL_PAGE_SHIFT)
+#define BASE_MEM_FIRST_FREE_ADDRESS                                            \
+	((BITS_PER_LONG << LOCAL_PAGE_SHIFT) + BASE_MEM_COOKIE_BASE)
 
 /* Similar to BASE_MEM_TILER_ALIGN_TOP, memory starting from the end of the
  * initial commit is aligned to 'extension' pages, where 'extension' must be a power
@@ -828,9 +830,6 @@ struct base_jd_atom_v2 {
 	base_jd_core_req core_req;
 	__u8 renderpass_id;
 	__u8 padding[7];
-#if defined(CONFIG_MALI_MTK_GPU_BM_2)
-	u32 frame_nr;  /* frame number to the atom */
-#endif
 };
 
 /**
@@ -879,9 +878,6 @@ typedef struct base_jd_atom {
 	base_jd_core_req core_req;
 	__u8 renderpass_id;
 	__u8 padding[7];
-#if defined(CONFIG_MALI_MTK_GPU_BM_2)
-	u32 frame_nr;  /* frame number to the atom */
-#endif
 } base_jd_atom;
 
 /* Job chain event code bits
@@ -1159,8 +1155,9 @@ enum base_jd_event_code {
 /**
  * struct base_jd_event_v2 - Event reporting structure
  *
- * @event_code:  event code.
+ * @event_code:  event code of type @ref base_jd_event_code.
  * @atom_number: the atom number that has completed.
+ * @padding:     padding.
  * @udata:       user data.
  *
  * This structure is used by the kernel driver to report information
@@ -1171,8 +1168,9 @@ enum base_jd_event_code {
  * by ANDing with BASE_JD_SW_EVENT_TYPE_MASK.
  */
 struct base_jd_event_v2 {
-	enum base_jd_event_code event_code;
+	__u32 event_code;
 	base_atom_id atom_number;
+	__u8 padding[3];
 	struct base_jd_udata udata;
 };
 

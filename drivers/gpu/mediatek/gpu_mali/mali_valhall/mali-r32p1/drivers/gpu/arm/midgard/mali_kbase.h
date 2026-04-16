@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
  * (C) COPYRIGHT 2010-2021 ARM Limited. All rights reserved.
@@ -109,9 +109,9 @@
 
 struct kbase_device *kbase_device_alloc(void);
 /*
-* note: configuration attributes member of kbdev needs to have
-* been setup before calling kbase_device_init
-*/
+ * note: configuration attributes member of kbdev needs to have
+ * been setup before calling kbase_device_init
+ */
 
 int kbase_device_misc_init(struct kbase_device *kbdev);
 void kbase_device_misc_term(struct kbase_device *kbdev);
@@ -256,8 +256,26 @@ void kbase_jd_done(struct kbase_jd_atom *katom, int slot_nr, ktime_t *end_timest
 		kbasep_js_atom_done_code done_code);
 void kbase_jd_cancel(struct kbase_device *kbdev, struct kbase_jd_atom *katom);
 void kbase_jd_zap_context(struct kbase_context *kctx);
-bool jd_done_nolock(struct kbase_jd_atom *katom,
-		struct list_head *completed_jobs_ctx);
+
+/*
+ * jd_done_nolock - Perform the necessary handling of an atom that has completed
+ *                  the execution.
+ *
+ * @katom: Pointer to the atom that completed the execution
+ * @post_immediately: Flag indicating that completion event can be posted
+ *                    immediately for @katom and the other atoms depdendent
+ *                    on @katom which also completed execution. The flag is
+ *                    false only for the case where the function is called by
+ *                    kbase_jd_done_worker() on the completion of atom running
+ *                    on the GPU.
+ *
+ * Note that if this is a soft-job that has had kbase_prepare_soft_job called on it then the caller
+ * is responsible for calling kbase_finish_soft_job *before* calling this function.
+ *
+ * The caller must hold the kbase_jd_context.lock.
+ */
+bool jd_done_nolock(struct kbase_jd_atom *katom, bool post_immediately);
+
 void kbase_jd_free_external_resources(struct kbase_jd_atom *katom);
 void kbase_jd_dep_clear_locked(struct kbase_jd_atom *katom);
 
@@ -491,6 +509,46 @@ void kbase_pm_metrics_start(struct kbase_device *kbdev);
  */
 void kbase_pm_metrics_stop(struct kbase_device *kbdev);
 
+#if MALI_USE_CSF && defined(KBASE_PM_RUNTIME)
+/**
+ * kbase_pm_handle_runtime_suspend - Handle the runtime suspend of GPU
+ *
+ * @kbdev: The kbase device structure for the device (must be a valid pointer)
+ *
+ * This function is called from the runtime suspend callback function for
+ * saving the HW state and powering down GPU, if GPU was in sleep state mode.
+ * It does the following steps
+ * - Powers up the L2 cache and re-activates the MCU.
+ * - Suspend the CSGs
+ * - Halts the MCU
+ * - Powers down the L2 cache.
+ * - Invokes the power_off callback to power down the GPU.
+ *
+ * Return: 0 if the GPU was already powered down or no error was encountered
+ * in the power down, otherwise an error code.
+ */
+int kbase_pm_handle_runtime_suspend(struct kbase_device *kbdev);
+
+/**
+ * kbase_pm_force_mcu_wakeup_after_sleep - Force the wake up of MCU from sleep
+ *
+ * @kbdev: The kbase device structure for the device (must be a valid pointer)
+ *
+ * This function forces the wake up of MCU from sleep state and wait for
+ * MCU to become active.
+ * It usually gets called from the runtime suspend callback function.
+ * It also gets called from the GPU reset handler or at the time of system
+ * suspend or when User tries to terminate/suspend the on-slot group.
+ *
+ * Note: @gpu_wakeup_override flag that forces the reactivation of MCU is
+ *       set by this function and it is the caller's responsibility to
+ *       clear the flag.
+ *
+ * Return: 0 if the wake up was successful.
+ */
+int kbase_pm_force_mcu_wakeup_after_sleep(struct kbase_device *kbdev);
+#endif
+
 #if !MALI_USE_CSF
 /**
  * Return the atom's ID, as was originally supplied by userspace in
@@ -498,7 +556,8 @@ void kbase_pm_metrics_stop(struct kbase_device *kbdev);
  * @kctx:  KBase context pointer
  * @katom: Atome for which to return ID
  */
-static inline int kbase_jd_atom_id(struct kbase_context *kctx, struct kbase_jd_atom *katom)
+static inline int kbase_jd_atom_id(struct kbase_context *kctx,
+				   const struct kbase_jd_atom *katom)
 {
 	int result;
 

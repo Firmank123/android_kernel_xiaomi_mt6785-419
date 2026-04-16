@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
  * (C) COPYRIGHT 2014, 2016, 2020-2021 ARM Limited. All rights reserved.
@@ -69,7 +69,16 @@ void kbase_io_history_dump(struct kbase_device *kbdev);
  */
 void kbasep_regs_history_debugfs_init(struct kbase_device *kbdev);
 
-#else /* defined(CONFIG_DEBUG_FS) && !IS_ENABLED(CONFIG_MALI_NO_MALI) */
+#else /* !defined(CONFIG_DEBUG_FS) || IS_ENABLED(CONFIG_MALI_NO_MALI) */
+
+#define kbase_io_history_init(...) (0)
+
+#define kbase_io_history_term CSTD_NOP
+
+#define kbase_io_history_dump CSTD_NOP
+
+#define kbasep_regs_history_debugfs_init CSTD_NOP
+
 #endif /* defined(CONFIG_DEBUG_FS) && !IS_ENABLED(CONFIG_MALI_NO_MALI) */
 
 #endif  /*_KBASE_REGS_HISTORY_DEBUGFS_H*/

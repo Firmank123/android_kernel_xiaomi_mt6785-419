@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
  * (C) COPYRIGHT 2011-2021 ARM Limited. All rights reserved.
@@ -83,7 +83,7 @@ int kbasep_pm_metrics_init(struct kbase_device *kbdev)
 
 	KBASE_DEBUG_ASSERT(kbdev != NULL);
 	kbdev->pm.backend.metrics.kbdev = kbdev;
-	kbdev->pm.backend.metrics.time_period_start = ktime_get();
+	kbdev->pm.backend.metrics.time_period_start = ktime_get_raw();
 	kbdev->pm.backend.metrics.values.time_busy = 0;
 	kbdev->pm.backend.metrics.values.time_idle = 0;
 	kbdev->pm.backend.metrics.values.time_in_protm = 0;
@@ -111,7 +111,7 @@ int kbasep_pm_metrics_init(struct kbase_device *kbdev)
 #else
 	KBASE_DEBUG_ASSERT(kbdev != NULL);
 	kbdev->pm.backend.metrics.kbdev = kbdev;
-	kbdev->pm.backend.metrics.time_period_start = ktime_get();
+	kbdev->pm.backend.metrics.time_period_start = ktime_get_raw();
 
 	kbdev->pm.backend.metrics.gpu_active = false;
 	kbdev->pm.backend.metrics.active_cl_ctx[0] = 0;
@@ -126,11 +126,6 @@ int kbasep_pm_metrics_init(struct kbase_device *kbdev)
 	kbdev->pm.backend.metrics.values.busy_cl[1] = 0;
 	kbdev->pm.backend.metrics.values.busy_gl = 0;
 
-#if IS_ENABLED(CONFIG_MALI_MIDGARD_DVFS) && IS_ENABLED(CONFIG_MALI_MTK_DVFS_POLICY)
-	kbdev->pm.backend.metrics.values.busy_gl_plus[0] = 0;
-	kbdev->pm.backend.metrics.values.busy_gl_plus[1] = 0;
-	kbdev->pm.backend.metrics.values.busy_gl_plus[2] = 0;
-#endif
 #endif
 	spin_lock_init(&kbdev->pm.backend.metrics.lock);
 
@@ -204,7 +199,7 @@ static void kbase_pm_get_dvfs_utilisation_calc(struct kbase_device *kbdev)
 	 * elapsed time. The lock taken inside kbase_ipa_control_query()
 	 * function can cause lot of variation.
 	 */
-	now = ktime_get();
+	now = ktime_get_raw();
 
 	if (err) {
 		dev_err(kbdev->dev,
@@ -240,6 +235,7 @@ static void kbase_pm_get_dvfs_utilisation_calc(struct kbase_device *kbdev)
 			 * difference.
 			 */
 			u64 margin_ns = diff_ns >> 6;
+
 			if (gpu_active_counter > (diff_ns + margin_ns)) {
 				dev_info(
 					kbdev->dev,
@@ -314,14 +310,6 @@ static void kbase_pm_get_dvfs_utilisation_calc(struct kbase_device *kbdev,
 			kbdev->pm.backend.metrics.values.busy_gl += ns_time;
 		if (kbdev->pm.backend.metrics.active_gl_ctx[2])
 			kbdev->pm.backend.metrics.values.busy_gl += ns_time;
-#if IS_ENABLED(CONFIG_MALI_MTK_DVFS_POLICY)
-		if (kbdev->pm.backend.metrics.active_gl_ctx[0])
-			kbdev->pm.backend.metrics.values.busy_gl_plus[0] += ns_time;
-		if (kbdev->pm.backend.metrics.active_gl_ctx[1])
-			kbdev->pm.backend.metrics.values.busy_gl_plus[1] += ns_time;
-		if (kbdev->pm.backend.metrics.active_gl_ctx[2])
-			kbdev->pm.backend.metrics.values.busy_gl_plus[2] += ns_time;
-#endif
 	} else {
 		kbdev->pm.backend.metrics.values.time_idle +=
 			(u32)(ktime_to_ns(diff) >> KBASE_PM_TIME_SHIFT);
@@ -343,7 +331,7 @@ void kbase_pm_get_dvfs_metrics(struct kbase_device *kbdev,
 #if MALI_USE_CSF
 	kbase_pm_get_dvfs_utilisation_calc(kbdev);
 #else
-	kbase_pm_get_dvfs_utilisation_calc(kbdev, ktime_get());
+	kbase_pm_get_dvfs_utilisation_calc(kbdev, ktime_get_raw());
 #endif
 
 	memset(diff, 0, sizeof(*diff));
@@ -356,11 +344,6 @@ void kbase_pm_get_dvfs_metrics(struct kbase_device *kbdev,
 	diff->busy_cl[0] = cur->busy_cl[0] - last->busy_cl[0];
 	diff->busy_cl[1] = cur->busy_cl[1] - last->busy_cl[1];
 	diff->busy_gl = cur->busy_gl - last->busy_gl;
-#if IS_ENABLED(CONFIG_MALI_MTK_DVFS_POLICY)
-	diff->busy_gl_plus[0]= cur->busy_gl_plus[0]- last->busy_gl_plus[0];
-	diff->busy_gl_plus[1] = cur->busy_gl_plus[1]- last->busy_gl_plus[1];
-	diff->busy_gl_plus[2] = cur->busy_gl_plus[2]- last->busy_gl_plus[2];
-#endif
 #endif
 
 	*last = *cur;
@@ -414,18 +397,9 @@ void kbase_pm_get_dvfs_action(struct kbase_device *kbdev)
 	 */
 	kbase_platform_dvfs_event(kbdev, utilisation);
 #endif
-#endif
+#endif // MTK
 }
 
-#if IS_ENABLED(CONFIG_MALI_MTK_DVFS_POLICY)
-bool kbase_pm_metrics_is_active(struct kbase_device *kbdev)
-{
-	return false;
-}
-KBASE_EXPORT_TEST_API(kbase_pm_metrics_is_active);
-void kbase_pm_metrics_start(struct kbase_device *kbdev) {}
-void kbase_pm_metrics_stop(struct kbase_device *kbdev) {}
-#else
 bool kbase_pm_metrics_is_active(struct kbase_device *kbdev)
 {
 	bool isactive;
@@ -480,7 +454,7 @@ void kbase_pm_metrics_stop(struct kbase_device *kbdev)
 	if (update)
 		hrtimer_cancel(&kbdev->pm.backend.metrics.timer);
 }
-#endif
+
 
 #endif /* CONFIG_MALI_MIDGARD_DVFS */
 
@@ -521,8 +495,7 @@ static void kbase_pm_metrics_active_calc(struct kbase_device *kbdev)
 					BASE_JD_REQ_SPECIFIC_COHERENT_GROUP)
 						? katom->device_nr : 0;
 				if (!WARN_ON(device_nr >= 2))
-					kbdev->pm.backend.metrics.
-						active_cl_ctx[device_nr] = 1;
+					kbdev->pm.backend.metrics.active_cl_ctx[device_nr] = 1;
 			} else {
 				kbdev->pm.backend.metrics.active_gl_ctx[js] = 1;
 				trace_sysgraph(SGR_ACTIVE, 0, js);
@@ -545,7 +518,7 @@ void kbase_pm_metrics_update(struct kbase_device *kbdev, ktime_t *timestamp)
 	spin_lock_irqsave(&kbdev->pm.backend.metrics.lock, flags);
 
 	if (!timestamp) {
-		now = ktime_get();
+		now = ktime_get_raw();
 		timestamp = &now;
 	}
 

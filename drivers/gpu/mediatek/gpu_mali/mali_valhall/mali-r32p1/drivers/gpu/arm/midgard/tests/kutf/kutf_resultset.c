@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
  * (C) COPYRIGHT 2014, 2017, 2020-2021 ARM Limited. All rights reserved.
@@ -89,7 +89,7 @@ int kutf_add_result(struct kutf_context *context,
 void kutf_destroy_result_set(struct kutf_result_set *set)
 {
 	if (!list_empty(&set->results))
-		pr_err("kutf_destroy_result_set: Unread results from test\n");
+		pr_err("%s: Unread results from test\n", __func__);
 
 	kfree(set);
 }

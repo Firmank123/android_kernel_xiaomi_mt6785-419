@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
  * (C) COPYRIGHT 2020-2021 ARM Limited. All rights reserved.
@@ -42,8 +42,8 @@ DECLARE_EVENT_CLASS(gpu,
 	TP_ARGS(state, gpu_id),
 
 	TP_STRUCT__entry(
-		__field(	u32,		state		)
-		__field(	u32,		gpu_id		)
+		__field(u32, state)
+		__field(u32, gpu_id)
 	),
 
 	TP_fast_assign(

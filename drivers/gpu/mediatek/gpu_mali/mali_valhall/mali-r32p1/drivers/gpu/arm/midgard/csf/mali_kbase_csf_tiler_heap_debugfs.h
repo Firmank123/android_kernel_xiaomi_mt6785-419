@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
  * (C) COPYRIGHT 2020-2021 ARM Limited. All rights reserved.
@@ -33,5 +33,12 @@ struct kbase_context;
  * @kctx: The kbase_context for which to create the debugfs entry
  */
 void kbase_csf_tiler_heap_debugfs_init(struct kbase_context *kctx);
+
+/**
+ * kbase_csf_tiler_heap_total_debugfs_init() - Create a debugfs entry for per context tiler heap
+ *
+ * @kctx: The kbase_context for which to create the debugfs entry
+ */
+void kbase_csf_tiler_heap_total_debugfs_init(struct kbase_context *kctx);
 
 #endif /* _KBASE_CSF_TILER_HEAP_DEBUGFS_H_ */

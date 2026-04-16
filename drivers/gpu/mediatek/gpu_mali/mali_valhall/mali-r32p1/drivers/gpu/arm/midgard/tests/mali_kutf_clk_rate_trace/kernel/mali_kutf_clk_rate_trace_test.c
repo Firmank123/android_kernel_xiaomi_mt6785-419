@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
  * (C) COPYRIGHT 2020-2021 ARM Limited. All rights reserved.
@@ -195,7 +195,7 @@ static void kutf_set_pm_ctx_idle(struct kutf_context *context)
 	kbase_pm_context_idle(data->kbdev);
 }
 
-static char const *kutf_clk_trace_do_change_pm_ctx(struct kutf_context *context,
+static const char *kutf_clk_trace_do_change_pm_ctx(struct kutf_context *context,
 				struct clk_trace_portal_input *cmd)
 {
 	struct kutf_clk_rate_trace_fixture_data *data = context->fixture;
@@ -232,7 +232,7 @@ static char const *kutf_clk_trace_do_change_pm_ctx(struct kutf_context *context,
 	return errmsg;
 }
 
-static char const *kutf_clk_trace_do_get_rate(struct kutf_context *context,
+static const char *kutf_clk_trace_do_get_rate(struct kutf_context *context,
 				struct clk_trace_portal_input *cmd)
 {
 	struct kutf_clk_rate_trace_fixture_data *data = context->fixture;
@@ -294,7 +294,7 @@ static char const *kutf_clk_trace_do_get_rate(struct kutf_context *context,
  * message contains the current snapshot record, with each clock's
  * data sequentially placed inside (array marker) [ ].
  */
-static char const *kutf_clk_trace_do_get_snapshot(struct kutf_context *context,
+static const char *kutf_clk_trace_do_get_snapshot(struct kutf_context *context,
 				struct clk_trace_portal_input *cmd)
 {
 	struct kutf_clk_rate_trace_fixture_data *data = context->fixture;
@@ -352,7 +352,7 @@ static char const *kutf_clk_trace_do_get_snapshot(struct kutf_context *context,
  * Invokes frequency change notification callbacks with a fake
  * GPU frequency 42 kHz for the top clock domain.
  */
-static char const *kutf_clk_trace_do_invoke_notify_42k(
+static const char *kutf_clk_trace_do_invoke_notify_42k(
 	struct kutf_context *context,
 	struct clk_trace_portal_input *cmd)
 {
@@ -392,7 +392,7 @@ static char const *kutf_clk_trace_do_invoke_notify_42k(
 	return errmsg;
 }
 
-static char const *kutf_clk_trace_do_close_portal(struct kutf_context *context,
+static const char *kutf_clk_trace_do_close_portal(struct kutf_context *context,
 				struct clk_trace_portal_input *cmd)
 {
 	struct kutf_clk_rate_trace_fixture_data *data = context->fixture;
@@ -426,7 +426,7 @@ static char const *kutf_clk_trace_do_close_portal(struct kutf_context *context,
  *
  * Return: A string to indicate the platform (PV/PTM/GPU/UNKNOWN)
  */
-static char const *kutf_clk_trace_do_get_platform(
+static const char *kutf_clk_trace_do_get_platform(
 	struct kutf_context *context,
 	struct clk_trace_portal_input *cmd)
 {
@@ -530,7 +530,7 @@ static bool kutf_clk_trace_process_portal_cmd(struct kutf_context *context,
 		errmsg = kutf_clk_trace_do_get_platform(context, cmd);
 		break;
 	case PORTAL_CMD_GET_CLK_RATE_MGR:
-		/* Fall through */
+		fallthrough;
 	case PORTAL_CMD_GET_CLK_RATE_TRACE:
 		errmsg = kutf_clk_trace_do_get_rate(context, cmd);
 		break;
@@ -538,7 +538,7 @@ static bool kutf_clk_trace_process_portal_cmd(struct kutf_context *context,
 		errmsg = kutf_clk_trace_do_get_snapshot(context, cmd);
 		break;
 	case PORTAL_CMD_INC_PM_CTX_CNT:
-		/* Fall through */
+		fallthrough;
 	case PORTAL_CMD_DEC_PM_CTX_CNT:
 		errmsg = kutf_clk_trace_do_change_pm_ctx(context, cmd);
 		break;
@@ -613,7 +613,7 @@ static int kutf_clk_trace_do_nack_response(struct kutf_context *context,
  *     3). If the GPU active transition occurs following 2), there
  *         must be rate change event from tracing.
  */
-void kutf_clk_trace_barebone_check(struct kutf_context *context)
+static void kutf_clk_trace_barebone_check(struct kutf_context *context)
 {
 	struct kutf_clk_rate_trace_fixture_data *data = context->fixture;
 	struct kbase_device *kbdev = data->kbdev;
@@ -691,7 +691,7 @@ static bool kutf_clk_trace_end_of_stream(struct clk_trace_portal_input *cmd)
 	return (cmd->named_val_err == -EBUSY);
 }
 
-void kutf_clk_trace_no_clks_dummy(struct kutf_context *context)
+static void kutf_clk_trace_no_clks_dummy(struct kutf_context *context)
 {
 	struct clk_trace_portal_input cmd;
 	unsigned long timeout = jiffies + HZ * 2;
@@ -897,7 +897,7 @@ static void mali_kutf_clk_rate_trace_remove_fixture(
 /**
  * mali_kutf_clk_rate_trace_test_module_init() - Entry point for test mdoule.
  */
-int mali_kutf_clk_rate_trace_test_module_init(void)
+static int __init mali_kutf_clk_rate_trace_test_module_init(void)
 {
 	struct kutf_suite *suite;
 	unsigned int filters;
@@ -943,7 +943,7 @@ int mali_kutf_clk_rate_trace_test_module_init(void)
  * mali_kutf_clk_rate_trace_test_module_exit() - Module exit point for this
  *                                               test.
  */
-void mali_kutf_clk_rate_trace_test_module_exit(void)
+static void __exit mali_kutf_clk_rate_trace_test_module_exit(void)
 {
 	pr_debug("Exit start\n");
 	kutf_destroy_application(kutf_app);

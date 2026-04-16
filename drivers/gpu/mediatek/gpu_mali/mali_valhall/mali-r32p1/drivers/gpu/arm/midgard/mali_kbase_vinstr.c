@@ -1,7 +1,7 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2011-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2011-2022 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -24,6 +24,7 @@
 #include "mali_kbase_hwcnt_types.h"
 #include <uapi/gpu/arm/midgard/mali_kbase_hwcnt_reader.h>
 #include "mali_kbase_hwcnt_gpu.h"
+#include "mali_kbase_hwcnt_gpu_narrow.h"
 #include <uapi/gpu/arm/midgard/mali_kbase_ioctl.h>
 #include "mali_malisw.h"
 #include "mali_kbase_debug.h"
@@ -38,15 +39,6 @@
 #include <linux/poll.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
-
-#include <platform/mtk_mfg_counter.h>
-#ifdef CONFIG_MTK_PERF_TRACKER
-#include <perf_tracker.h>
-#endif
-#if IS_ENABLED(CONFIG_MTK_GPU_SWPM_SUPPORT)
-#define CREATE_TRACE_POINTS
-#include <platform/mtk_platform_common/mtk_gpu_trace.h>
-#endif
 
 /* Hwcnt reader API version */
 #define HWCNT_READER_API 1
@@ -64,8 +56,8 @@
  * @metadata:      Hardware counter metadata provided by virtualizer.
  * @metadata_user: API compatible hardware counter metadata provided by vinstr.
  *                 For compatibility with the user driver interface, this
- *                 contains a "truncated" version of the HWCNT metadata limited
- *                 to 64 entries per block. NULL when not required.
+ *                 contains a narrowed version of the HWCNT metadata limited
+ *                 to 64 entries per block of 32 bits each.
  * @lock:          Lock protecting all vinstr state.
  * @suspend_count: Suspend reference count. If non-zero, timer and worker are
  *                 prevented from being re-scheduled.
@@ -77,7 +69,7 @@
 struct kbase_vinstr_context {
 	struct kbase_hwcnt_virtualizer *hvirt;
 	const struct kbase_hwcnt_metadata *metadata;
-	const struct kbase_hwcnt_metadata *metadata_user;
+	const struct kbase_hwcnt_metadata_narrow *metadata_user;
 	struct mutex lock;
 	size_t suspend_count;
 	size_t client_count;
@@ -98,8 +90,8 @@ struct kbase_vinstr_context {
  *                     occur. If 0, not a periodic client.
  * @enable_map:        Counters enable map.
  * @tmp_buf:           Temporary buffer to use before handing dump to client.
- * @dump_bufs:         Array of dump buffers allocated by this client.
- * @dump_bufs_meta:    Metadata of dump buffers.
+ * @dump_bufs:         Array of narrow dump buffers allocated by this client.
+ * @dump_bufs_meta:    Metadata of hwcnt reader client buffers.
  * @meta_idx:          Index of metadata being accessed by userspace.
  * @read_idx:          Index of buffer read by userspace.
  * @write_idx:         Index of buffer being written by dump worker.
@@ -113,7 +105,7 @@ struct kbase_vinstr_client {
 	u32 dump_interval_ns;
 	struct kbase_hwcnt_enable_map enable_map;
 	struct kbase_hwcnt_dump_buffer tmp_buf;
-	struct kbase_hwcnt_dump_buffer_array dump_bufs;
+	struct kbase_hwcnt_dump_buffer_narrow_array dump_bufs;
 	struct kbase_hwcnt_reader_metadata *dump_bufs_meta;
 	atomic_t meta_idx;
 	atomic_t read_idx;
@@ -146,16 +138,6 @@ static const struct file_operations vinstr_client_fops = {
 	.compat_ioctl   = kbasep_vinstr_hwcnt_reader_ioctl,
 	.mmap           = kbasep_vinstr_hwcnt_reader_mmap,
 	.release        = kbasep_vinstr_hwcnt_reader_release,
-};
-
-unsigned int *kernel_dump;
-//check the mtk tool using now
-int mtk_pm_tool = pm_non;
-int ds5_used = 1;
-
-static struct kbase_vinstr_client *mtk_cli = NULL;
-struct mtk_gpu_perf{
-	uint32_t counter[VINSTR_PERF_COUNTER_LAST];
 };
 
 /**
@@ -209,7 +191,7 @@ static int kbasep_vinstr_client_dump(
 	unsigned int write_idx;
 	unsigned int read_idx;
 	struct kbase_hwcnt_dump_buffer *tmp_buf;
-	struct kbase_hwcnt_dump_buffer *dump_buf;
+	struct kbase_hwcnt_dump_buffer_narrow *dump_buf;
 	struct kbase_hwcnt_reader_metadata *meta;
 	u8 clk_cnt;
 
@@ -219,32 +201,19 @@ static int kbasep_vinstr_client_dump(
 	write_idx = atomic_read(&vcli->write_idx);
 	read_idx = atomic_read(&vcli->read_idx);
 
-	if (ds5_used) {
-		/* Check if there is a place to copy HWC block into. */
-		if (write_idx - read_idx == vcli->dump_bufs.buf_cnt)
-			return -EBUSY;
-		write_idx %= vcli->dump_bufs.buf_cnt;
+	/* Check if there is a place to copy HWC block into. */
+	if (write_idx - read_idx == vcli->dump_bufs.buf_cnt)
+		return -EBUSY;
+	write_idx %= vcli->dump_bufs.buf_cnt;
 
-		dump_buf = &vcli->dump_bufs.bufs[write_idx];
-		meta = &vcli->dump_bufs_meta[write_idx];
-		tmp_buf = &vcli->tmp_buf;
-	} else {
-		dump_buf = &vcli->dump_bufs.bufs[0];
-		meta = &vcli->dump_bufs_meta[0];
-		tmp_buf = &vcli->tmp_buf;
-	}
-	
-	
+	dump_buf = &vcli->dump_bufs.bufs[write_idx];
+	meta = &vcli->dump_bufs_meta[write_idx];
+	tmp_buf = &vcli->tmp_buf;
+
 	errcode = kbase_hwcnt_virtualizer_client_dump(
 		vcli->hvcli, &ts_start_ns, &ts_end_ns, tmp_buf);
 	if (errcode)
 		return errcode;
-
-
-	if (mtk_pm_tool == pm_ltr && ds5_used == 0) {
-		kernel_dump = tmp_buf->dump_buf;
-		MTK_update_gpu_LTR();
-	}
 
 	/* Patch the dump buf headers, to hide the counters that other hwcnt
 	 * clients are using.
@@ -255,17 +224,11 @@ static int kbasep_vinstr_client_dump(
 	 * variant will explicitly zero any non-enabled counters to ensure
 	 * nothing except exactly what the user asked for is made visible.
 	 *
-	 * If the metadata in vinstr (vctx->metadata_user) is not NULL, it means
-	 * vinstr has the truncated metadata, so do a narrow copy since
-	 * virtualizer has a bigger buffer but user only needs part of it.
-	 * otherwise we do a full copy.
+	 * A narrow copy is required since virtualizer has a bigger buffer
+	 * but user only needs part of it.
 	 */
-	if (vcli->vctx->metadata_user)
-		kbase_hwcnt_dump_buffer_copy_strict_narrow(dump_buf, tmp_buf,
-							   &vcli->enable_map);
-	else
-		kbase_hwcnt_dump_buffer_copy_strict(dump_buf, tmp_buf,
-						    &vcli->enable_map);
+	kbase_hwcnt_dump_buffer_copy_strict_narrow(dump_buf, tmp_buf,
+						   &vcli->enable_map);
 
 	clk_cnt = vcli->vctx->metadata->clk_cnt;
 
@@ -394,6 +357,8 @@ static void kbasep_vinstr_dump_worker(struct work_struct *work)
  * kbasep_vinstr_dump_timer() - Dump timer that schedules the dump worker for
  *                              execution as soon as possible.
  * @timer: Timer structure.
+ *
+ * Return: HRTIMER_NORESTART always.
  */
 static enum hrtimer_restart kbasep_vinstr_dump_timer(struct hrtimer *timer)
 {
@@ -420,7 +385,7 @@ static void kbasep_vinstr_client_destroy(struct kbase_vinstr_client *vcli)
 
 	kbase_hwcnt_virtualizer_client_destroy(vcli->hvcli);
 	kfree(vcli->dump_bufs_meta);
-	kbase_hwcnt_dump_buffer_array_free(&vcli->dump_bufs);
+	kbase_hwcnt_dump_buffer_narrow_array_free(&vcli->dump_bufs);
 	kbase_hwcnt_dump_buffer_free(&vcli->tmp_buf);
 	kbase_hwcnt_enable_map_free(&vcli->enable_map);
 	kfree(vcli);
@@ -478,20 +443,11 @@ static int kbasep_vinstr_client_create(
 	/* Enable all the available clk_enable_map. */
 	vcli->enable_map.clk_enable_map = (1ull << vctx->metadata->clk_cnt) - 1;
 
-	if (vctx->metadata_user)
-		/* Use vinstr's truncated metadata to alloc dump buffers which
-		 * interact with clients.
-		 */
-		errcode =
-			kbase_hwcnt_dump_buffer_array_alloc(vctx->metadata_user,
-							    setup->buffer_count,
-							    &vcli->dump_bufs);
-	else
-		/* Use metadata from virtualizer to allocate dump buffers  if
-		 * vinstr doesn't have the truncated metadata.
-		 */
-		errcode = kbase_hwcnt_dump_buffer_array_alloc(
-			vctx->metadata, setup->buffer_count, &vcli->dump_bufs);
+	/* Use vinstr's narrowed metadata to alloc narrow dump buffers which
+	 * interact with clients.
+	 */
+	errcode = kbase_hwcnt_dump_buffer_narrow_array_alloc(
+		vctx->metadata_user, setup->buffer_count, &vcli->dump_bufs);
 	if (errcode)
 		goto error;
 
@@ -536,9 +492,8 @@ int kbase_vinstr_init(
 
 	vctx->hvirt = hvirt;
 	vctx->metadata = metadata;
-	vctx->metadata_user = NULL;
-	errcode = kbase_hwcnt_gpu_metadata_create_truncate_64(
-		&vctx->metadata_user, metadata);
+	errcode = kbase_hwcnt_gpu_metadata_narrow_create(&vctx->metadata_user,
+							 metadata);
 	if (errcode)
 		goto err_metadata_create;
 
@@ -575,8 +530,7 @@ void kbase_vinstr_term(struct kbase_vinstr_context *vctx)
 		}
 	}
 
-	if (vctx->metadata_user)
-		kbase_hwcnt_metadata_destroy(vctx->metadata_user);
+	kbase_hwcnt_gpu_metadata_narrow_destroy(vctx->metadata_user);
 
 	WARN_ON(vctx->client_count != 0);
 	kfree(vctx);
@@ -962,12 +916,13 @@ static long kbasep_vinstr_hwcnt_reader_ioctl_get_hwver(
 }
 
 /**
- * The hwcnt reader's ioctl command - get API version.
+ * kbasep_vinstr_hwcnt_reader_ioctl_get_api_version() - get API version ioctl
+ *                                                      command.
  * @cli:    The non-NULL pointer to the client
  * @arg:    Command's argument.
  * @size:   Size of arg.
  *
- * @return 0 on success, else error code.
+ * Return: 0 on success, else error code.
  */
 static long kbasep_vinstr_hwcnt_reader_ioctl_get_api_version(
 	struct kbase_vinstr_client *cli, unsigned long arg, size_t size)
@@ -1032,24 +987,14 @@ static long kbasep_vinstr_hwcnt_reader_ioctl(
 	case _IOC_NR(KBASE_HWCNT_READER_GET_API_VERSION):
 		rcode = kbasep_vinstr_hwcnt_reader_ioctl_get_api_version(
 				cli, arg, _IOC_SIZE(cmd));
-		if (mtk_pm_tool != pm_non) {
-			MTK_kbasep_vinstr_hwcnt_set_interval(0);
-			ds5_used = 1;
-		}
 		break;
 	case _IOC_NR(KBASE_HWCNT_READER_GET_HWVER):
 		rcode = kbasep_vinstr_hwcnt_reader_ioctl_get_hwver(
 			cli, (u32 __user *)arg);
 		break;
 	case _IOC_NR(KBASE_HWCNT_READER_GET_BUFFER_SIZE):
-		if (cli->vctx->metadata_user)
-			rcode = put_user(
-				(u32)cli->vctx->metadata_user->dump_buf_bytes,
-				(u32 __user *)arg);
-		else
-			rcode = put_user(
-				(u32)cli->vctx->metadata->dump_buf_bytes,
-				(u32 __user *)arg);
+		rcode = put_user((u32)cli->vctx->metadata_user->dump_buf_bytes,
+				 (u32 __user *)arg);
 		break;
 	case _IOC_NR(KBASE_HWCNT_READER_DUMP):
 		rcode = kbasep_vinstr_hwcnt_reader_ioctl_dump(cli);
@@ -1068,13 +1013,6 @@ static long kbasep_vinstr_hwcnt_reader_ioctl(
 	case _IOC_NR(KBASE_HWCNT_READER_SET_INTERVAL):
 		rcode = kbasep_vinstr_hwcnt_reader_ioctl_set_interval(
 			cli, (u32)arg);
-		if ((u32)arg == 0 && mtk_pm_tool != pm_non) {
-			ds5_used = 0;
-			if (mtk_pm_tool == pm_ltr)
-				MTK_kbasep_vinstr_hwcnt_set_interval(8000000);
-			else if (mtk_pm_tool == pm_swpm)
-				MTK_kbasep_vinstr_hwcnt_set_interval(1000000);
-		}
 		break;
 	case _IOC_NR(KBASE_HWCNT_READER_ENABLE_EVENT):
 		rcode = kbasep_vinstr_hwcnt_reader_ioctl_enable_event(
@@ -1178,7 +1116,7 @@ static int kbasep_vinstr_hwcnt_reader_release(struct inode *inode,
 	struct file *filp)
 {
 	struct kbase_vinstr_client *vcli = filp->private_data;
-	if (ds5_used) {
+
 	mutex_lock(&vcli->vctx->lock);
 
 	vcli->vctx->client_count--;
@@ -1187,113 +1125,6 @@ static int kbasep_vinstr_hwcnt_reader_release(struct inode *inode,
 	mutex_unlock(&vcli->vctx->lock);
 
 	kbasep_vinstr_client_destroy(vcli);
-	}
+
 	return 0;
 }
-void MTK_update_mtk_pm(int flag)
-{
-	mtk_pm_tool = flag;
-}
-
-int MTK_get_mtk_pm(void)
-{
-	return mtk_pm_tool;
-}
-
-int MTK_kbase_vinstr_hwcnt_reader_setup(
-	struct kbase_vinstr_context *vctx,
-	struct kbase_ioctl_hwcnt_reader_setup *setup)
-{
-	int errcode;
-	int fd;
-	struct kbase_vinstr_client *vcli = NULL;
-
-	if (!vctx || !setup ||
-	    (setup->buffer_count == 0) ||
-	    (setup->buffer_count > MAX_BUFFER_COUNT))
-		return -EINVAL;
-
-	errcode = kbasep_vinstr_client_create(vctx, setup, &vcli);
-
-	if (errcode)
-		goto error;
-
-	fd = errcode;
-
-	/* Add the new client. No need to reschedule worker, as not periodic */
-	mutex_lock(&vctx->lock);
-
-	vctx->client_count++;
-	list_add(&vcli->node, &vctx->clients);
-	mtk_cli = vcli;
-	ds5_used = 0;
-	mutex_unlock(&vctx->lock);
-	return fd;
-error:
-	kbasep_vinstr_client_destroy(vcli);
-	return errcode;
-}
-
-
-void MTK_kbasep_vinstr_hwcnt_set_interval(unsigned int interval)
-{
-	if (mtk_cli != NULL) {
-		kbasep_vinstr_hwcnt_reader_ioctl_set_interval(mtk_cli, interval);
-	}
-}
-
-void MTK_kbasep_vinstr_hwcnt_release(void)
-{
-	mtk_pm_tool = pm_non;
-	ds5_used = 1;
-	if (mtk_cli != NULL) {
-		mutex_lock(&mtk_cli->vctx->lock);
-		mtk_cli->vctx->suspend_count = 0;
-		mtk_cli->vctx->client_count--;
-		list_del(&mtk_cli->node);
-		mutex_unlock(&mtk_cli->vctx->lock);
-
-		kbasep_vinstr_client_destroy(mtk_cli);
-	}
-}
-
-void MTK_update_gpu_LTR(void)
-{
-	unsigned int pm_gpu_loading = 0;
-	struct mtk_gpu_perf gpu_perf_counter;
-	unsigned int stall_counter[4] = {0};
-	int i = 0;
-	mtk_get_gpu_loading(&pm_gpu_loading);
-#if defined(CONFIG_MTK_GPUFREQ_V2)
-	gpu_perf_counter.counter[VINSTR_GPU_FREQ] = gpufreq_get_cur_freq(TARGET_DEFAULT);
-	gpu_perf_counter.counter[VINSTR_GPU_VOLT] = gpufreq_get_cur_volt(TARGET_DEFAULT);
-#else
-	gpu_perf_counter.counter[VINSTR_GPU_FREQ] = mt_gpufreq_get_cur_freq();
-	gpu_perf_counter.counter[VINSTR_GPU_VOLT] = mt_gpufreq_get_cur_volt();
-#endif
-	gpu_perf_counter.counter[VINSTR_GPU_LOADING] = pm_gpu_loading;
-	for (i = VINSTR_GPU_ACTIVE; i <= VINSTR_JS1_ACTIVE; i++) {
-		int pmu_index = gpu_pmu_index[i] & 0x1FF;
-		int index_cnt = gpu_pmu_index[i] >> 9;
-		int j = 0;
-		for (j = 0; j < index_cnt; j++) {
-			gpu_perf_counter.counter[i] += kernel_dump[pmu_index];
-			pmu_index += 64;
-		}
-	}
-	mtk_GPU_STALL_RAW(stall_counter, 4);
-	gpu_perf_counter.counter[VINSTR_STALL0] = stall_counter[0];
-	gpu_perf_counter.counter[VINSTR_STALL1] = stall_counter[1];
-	gpu_perf_counter.counter[VINSTR_STALL2] = stall_counter[2];
-	gpu_perf_counter.counter[VINSTR_STALL3] = stall_counter[3];
-	gpu_perf_counter.counter[VINSTR_TRIANGLES] = kernel_dump[70];
-	gpu_perf_counter.counter[VINSTR_POINTS] = kernel_dump[72];
-	gpu_perf_counter.counter[VINSTR_LINES] = kernel_dump[71];
-	gpu_perf_counter.counter[VINSTR_LS_MEM_ATOMIC] = kernel_dump[432];
-#if IS_ENABLED(CONFIG_MTK_PERF_TRACKER) && IS_ENABLED(CONFIG_MTK_GPU_SWPM_SUPPORT)
-	trace_perf_index_gpu(gpu_perf_counter.counter, VINSTR_PERF_COUNTER_LAST);
-#endif
-
-
-}
-

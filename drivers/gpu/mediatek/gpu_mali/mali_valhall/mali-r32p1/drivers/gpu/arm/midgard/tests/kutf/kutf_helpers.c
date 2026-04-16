@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
  * (C) COPYRIGHT 2017, 2020-2021 ARM Limited. All rights reserved.
@@ -21,7 +21,6 @@
 
 /* Kernel UTF test helpers */
 #include <kutf/kutf_helpers.h>
-
 #include <linux/err.h>
 #include <linux/jiffies.h>
 #include <linux/sched.h>

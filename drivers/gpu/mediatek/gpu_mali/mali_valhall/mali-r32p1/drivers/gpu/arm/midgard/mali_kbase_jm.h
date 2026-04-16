@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
  * (C) COPYRIGHT 2013-2014, 2016, 2019-2021 ARM Limited. All rights reserved.
@@ -84,7 +84,7 @@ void kbase_jm_try_kick_all(struct kbase_device *kbdev);
  * by kbase_js_use_ctx().
  *
  * The context should have no atoms currently pulled from it
- * (kctx->atoms_pulled == 0).
+ * (kbase_jsctx_atoms_pulled(kctx) == 0).
  *
  * Caller must hold the hwaccess_lock
  */
