@@ -165,12 +165,12 @@
 			opp-microvolt = <1062500>;
 		};
 		opp14 {
-			opp-hz = /bits/ 64 <1986000000>;
+			opp-hz = /bits/ 64 <2000000000>;
 			opp-microvolt = <1093750>;
 		};
 		opp15 {
-			opp-hz = /bits/ 64 <2050000000>;
-			opp-microvolt = <1118750>;
+			opp-hz = /bits/ 64 <2200000000>;
+			opp-microvolt = <1131250>;
 		};
 	};
 
@@ -186,7 +186,7 @@
 			clock-frequency = <2000000000>;
 			operating-points-v2 = <&cluster0_opp>;
 			dynamic-power-coefficient = <85>;
-			capacity-dmips-mhz = <427>;
+			capacity-dmips-mhz = <383>;
 			cpu-idle-states = <&cpuoff_l &clusteroff_l
 						&mcusysoff &s2idle>;
 		};
@@ -199,7 +199,7 @@
 			clock-frequency = <2000000000>;
 			operating-points-v2 = <&cluster0_opp>;
 			dynamic-power-coefficient = <85>;
-			capacity-dmips-mhz = <427>;
+			capacity-dmips-mhz = <383>;
 			cpu-idle-states = <&cpuoff_l &clusteroff_l
 						&mcusysoff &s2idle>;
 		};
@@ -212,7 +212,7 @@
 			clock-frequency = <2000000000>;
 			operating-points-v2 = <&cluster0_opp>;
 			dynamic-power-coefficient = <85>;
-			capacity-dmips-mhz = <427>;
+			capacity-dmips-mhz = <383>;
 			cpu-idle-states = <&cpuoff_l &clusteroff_l
 						&mcusysoff &s2idle>;
 		};
@@ -225,7 +225,7 @@
 			clock-frequency = <2000000000>;
 			operating-points-v2 = <&cluster0_opp>;
 			dynamic-power-coefficient = <85>;
-			capacity-dmips-mhz = <427>;
+			capacity-dmips-mhz = <383>;
 			cpu-idle-states = <&cpuoff_l &clusteroff_l
 						&mcusysoff &s2idle>;
 		};
@@ -238,7 +238,7 @@
 			clock-frequency = <2000000000>;
 			operating-points-v2 = <&cluster0_opp>;
 			dynamic-power-coefficient = <85>;
-			capacity-dmips-mhz = <427>;
+			capacity-dmips-mhz = <383>;
 			cpu-idle-states = <&cpuoff_l &clusteroff_l
 						&mcusysoff  &s2idle>;
 		};
@@ -251,7 +251,7 @@
 			clock-frequency = <2000000000>;
 			operating-points-v2 = <&cluster0_opp>;
 			dynamic-power-coefficient = <85>;
-			capacity-dmips-mhz = <427>;
+			capacity-dmips-mhz = <383>;
 			cpu-idle-states = <&cpuoff_l &clusteroff_l
 						&mcusysoff  &s2idle>;
 		};
@@ -261,7 +261,7 @@
 			compatible = "arm,cortex-a75";
 			reg = <0x0600>;
 			enable-method = "psci";
-			clock-frequency = <2050000000>;
+			clock-frequency = <2200000000>;
 			operating-points-v2 = <&cluster1_opp>;
 			dynamic-power-coefficient = <275>;
 			capacity-dmips-mhz = <1024>;
@@ -274,7 +274,7 @@
 			compatible = "arm,cortex-a75";
 			reg = <0x0700>;
 			enable-method = "psci";
-			clock-frequency = <2050000000>;
+			clock-frequency = <2200000000>;
 			operating-points-v2 = <&cluster1_opp>;
 			dynamic-power-coefficient = <275>;
 			capacity-dmips-mhz = <1024>;
@@ -5121,4 +5121,3 @@
 #ifdef CONFIG_MTK_ENABLE_GENIEZONE
 #include "mediatek/trusty.dtsi"
 #endif
-
