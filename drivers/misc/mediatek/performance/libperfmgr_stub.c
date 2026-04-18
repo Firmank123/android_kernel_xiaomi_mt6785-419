@@ -83,15 +83,9 @@ static const char *eas_ctrl_nodes[] = {
 	NULL
 };
 
-static const char *dram_ctrl_nodes[] = {
-	"ddr",
-	NULL
-};
-
-static void create_boost_ctrl_stubs(void)
+static void create_eas_ctrl_stubs(void)
 {
 	const char **node;
-	struct proc_dir_entry *dram_ctrl_dir;
 
 	perfmgr_dir = proc_mkdir("perfmgr", NULL);
 	if (!perfmgr_dir)
@@ -101,19 +95,12 @@ static void create_boost_ctrl_stubs(void)
 	if (!boost_ctrl_dir)
 		return;
 
-	/* Create /proc/perfmgr/boost_ctrl/eas_ctrl/ nodes */
 	eas_ctrl_dir = proc_mkdir("eas_ctrl", boost_ctrl_dir);
-	if (eas_ctrl_dir) {
-		for (node = eas_ctrl_nodes; *node; node++)
-			proc_create(*node, 0644, eas_ctrl_dir, &stub_proc_fops);
-	}
+	if (!eas_ctrl_dir)
+		return;
 
-	/* Create /proc/perfmgr/boost_ctrl/dram_ctrl/ nodes */
-	dram_ctrl_dir = proc_mkdir("dram_ctrl", boost_ctrl_dir);
-	if (dram_ctrl_dir) {
-		for (node = dram_ctrl_nodes; *node; node++)
-			proc_create(*node, 0644, dram_ctrl_dir, &stub_proc_fops);
-	}
+	for (node = eas_ctrl_nodes; *node; node++)
+		proc_create(*node, 0644, eas_ctrl_dir, &stub_proc_fops);
 }
 
 static int __init libperfmgr_stub_init(void)
@@ -137,8 +124,8 @@ static int __init libperfmgr_stub_init(void)
 			pr_err("libperfmgr_stub: failed to create boost_ta\n");
 	}
 
-	/* Create /proc/perfmgr/boost_ctrl/ nodes */
-	create_boost_ctrl_stubs();
+	/* Create /proc/perfmgr/boost_ctrl/eas_ctrl/ nodes */
+	create_eas_ctrl_stubs();
 
 	pr_info("libperfmgr_stub: dummy nodes initialized for libperfmgr compatibility\n");
 	return 0;
