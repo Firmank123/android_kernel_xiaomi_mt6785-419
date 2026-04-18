@@ -22,11 +22,6 @@ endif
 obj-y += perfmgr_main.o
 obj-y += base/
 
-ifneq ($(CONFIG_MTK_FPSGO_V3),y)
-obj-y += fbt_cpu.o
-fbt_cpu-y := fpsgo_stub.o
-endif
-
 obj-$(CONFIG_MTK_PERF_OBSERVER) += observer/
 obj-$(CONFIG_MTK_RESYM) += resym/
 obj-$(CONFIG_MTK_GBE) += gbe/
