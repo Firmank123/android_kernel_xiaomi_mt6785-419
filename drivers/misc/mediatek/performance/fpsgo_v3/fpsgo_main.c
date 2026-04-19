@@ -11,6 +11,10 @@
 #include <linux/topology.h>
 #include <linux/arch_topology.h>
 #include <linux/cpumask.h>
+#include <linux/delay.h>
+#include <linux/err.h>
+#include <linux/jiffies.h>
+#include <linux/sched/signal.h>
 #include <trace/events/power.h>
 #include <linux/tracepoint.h>
 #include <linux/kallsyms.h>
@@ -31,6 +35,10 @@
 #define CREATE_TRACE_POINTS
 
 #define TARGET_UNLIMITED_FPS 240
+#define FPSGO_AOSP_AUTOFEED_INTERVAL_MS 16
+#define FPSGO_AOSP_AUTOFEED_SCAN_MS 1000
+#define FPSGO_AOSP_AUTOFEED_HOLD_MS 3000
+#define FPSGO_AOSP_AUTOFEED_MAX_RENDER 8
 
 enum FPSGO_NOTIFIER_PUSH_TYPE {
 	FPSGO_NOTIFIER_SWITCH_FPSGO			= 0x00,
@@ -70,15 +78,32 @@ struct FPSGO_NOTIFIER_PUSH_TAG {
 
 static struct mutex notify_lock;
 static struct task_struct *kfpsgo_tsk;
+static struct task_struct *kfpsgo_autofeed_tsk;
 static int fpsgo_enable;
 static int fpsgo_force_onoff;
 static int gpu_boost_enable_perf;
 static int gpu_boost_enable_camera;
 static int perfserv_ta;
+static int fpsgo_aosp_autofeed = 1;
+static unsigned long fpsgo_last_external_jiffies;
+
+module_param_named(aosp_autofeed, fpsgo_aosp_autofeed, int, 0644);
+MODULE_PARM_DESC(aosp_autofeed,
+	"Enable kernel autofeed fallback for AOSP when vendor fpsgo events are absent");
 
 extern int powerhal_tid;
 
 void (*rsu_cpufreq_notifier_fp)(int cluster_id, unsigned long freq);
+
+static void fpsgo_notifier_wq_cb_qudeq(int qudeq,
+		unsigned int startend, int cur_pid,
+		unsigned long long curr_ts, unsigned long long id);
+static void fpsgo_notifier_wq_cb_connect(int pid,
+		int connectedAPI, unsigned long long id);
+static void fpsgo_notifier_wq_cb_bqid(int pid, unsigned long long bufID,
+	int queue_SF, unsigned long long id, int create);
+static void fpsgo_notifier_wq_cb_vsync(unsigned long long ts);
+static void fpsgo_notifier_wq_cb_swap_buffer(int pid);
 
 /* TODO: event register & dispatch */
 int fpsgo_is_enable(void)
@@ -91,6 +116,99 @@ int fpsgo_is_enable(void)
 
 	FPSGO_LOGI("[FPSGO_CTRL] isenable %d\n", enable);
 	return enable;
+}
+
+static inline void fpsgo_mark_external_activity(void)
+{
+	WRITE_ONCE(fpsgo_last_external_jiffies, jiffies);
+}
+
+static bool fpsgo_autofeed_should_run(void)
+{
+	unsigned long last = READ_ONCE(fpsgo_last_external_jiffies);
+
+	if (!fpsgo_aosp_autofeed || !fpsgo_is_enable())
+		return false;
+
+	if (!last)
+		return true;
+
+	return time_after(jiffies,
+		last + msecs_to_jiffies(FPSGO_AOSP_AUTOFEED_HOLD_MS));
+}
+
+static int fpsgo_autofeed_scan_renderthread(int *pids, int max_nr)
+{
+	struct task_struct *g, *t;
+	int nr = 0;
+
+	rcu_read_lock();
+	for_each_process_thread(g, t) {
+		if (nr >= max_nr)
+			break;
+		if (t->flags & PF_KTHREAD)
+			continue;
+		if (strcmp(t->comm, "RenderThread"))
+			continue;
+		pids[nr++] = t->pid;
+	}
+	rcu_read_unlock();
+
+	return nr;
+}
+
+static void fpsgo_autofeed_inject_frame(int pid, unsigned long long ts)
+{
+	unsigned long long identifier;
+	unsigned long long buffer_id;
+
+	identifier = ((unsigned long long)(unsigned int)pid << 32) | 0xA05F;
+	buffer_id = identifier;
+
+	fpsgo_notifier_wq_cb_bqid(pid, buffer_id, 1, identifier, 1);
+	fpsgo_notifier_wq_cb_connect(pid, NATIVE_WINDOW_API_EGL, identifier);
+	fpsgo_notifier_wq_cb_qudeq(1, 1, pid, ts, identifier);
+	fpsgo_notifier_wq_cb_qudeq(1, 0, pid, ts + 1000, identifier);
+	fpsgo_notifier_wq_cb_qudeq(0, 1, pid, ts + 2000, identifier);
+	fpsgo_notifier_wq_cb_qudeq(0, 0, pid, ts + 3000, identifier);
+	fpsgo_notifier_wq_cb_swap_buffer(pid);
+}
+
+static int kfpsgo_autofeed(void *arg)
+{
+	int pids[FPSGO_AOSP_AUTOFEED_MAX_RENDER];
+	int nr = 0, i;
+	unsigned long next_scan = 0;
+
+	while (!kthread_should_stop()) {
+		unsigned long long ts;
+
+		if (!fpsgo_autofeed_should_run()) {
+			msleep(200);
+			continue;
+		}
+
+		if (time_after_eq(jiffies, next_scan)) {
+			nr = fpsgo_autofeed_scan_renderthread(
+				pids, FPSGO_AOSP_AUTOFEED_MAX_RENDER);
+			next_scan = jiffies +
+				msecs_to_jiffies(FPSGO_AOSP_AUTOFEED_SCAN_MS);
+		}
+
+		if (!nr) {
+			msleep(200);
+			continue;
+		}
+
+		ts = fpsgo_get_time();
+		fpsgo_notifier_wq_cb_vsync(ts);
+		for (i = 0; i < nr; i++)
+			fpsgo_autofeed_inject_frame(pids[i], ts);
+
+		msleep(FPSGO_AOSP_AUTOFEED_INTERVAL_MS);
+	}
+
+	return 0;
 }
 
 static void fpsgo_notifier_wq_cb_vsync(unsigned long long ts)
@@ -328,6 +446,8 @@ void fpsgo_notify_qudeq(int qudeq,
 	unsigned long long cur_ts;
 	struct FPSGO_NOTIFIER_PUSH_TAG *vpPush;
 
+	fpsgo_mark_external_activity();
+
 	FPSGO_LOGI("[FPSGO_CTRL] qudeq %d-%d, id %llu pid %d\n",
 		qudeq, startend, id, pid);
 
@@ -364,6 +484,8 @@ void fpsgo_notify_connect(int pid,
 {
 	struct FPSGO_NOTIFIER_PUSH_TAG *vpPush;
 
+	fpsgo_mark_external_activity();
+
 	FPSGO_LOGI(
 		"[FPSGO_CTRL] connect pid %d, id %llu, API %d\n",
 		pid, id, connectedAPI);
@@ -395,6 +517,8 @@ void fpsgo_notify_bqid(int pid, unsigned long long bufID,
 	int queue_SF, unsigned long long id, int create)
 {
 	struct FPSGO_NOTIFIER_PUSH_TAG *vpPush;
+
+	fpsgo_mark_external_activity();
 
 	FPSGO_LOGI("[FPSGO_CTRL] bqid pid %d, buf %llu, queue_SF %d, id %llu\n",
 		pid, bufID, queue_SF, id);
@@ -447,6 +571,8 @@ void fpsgo_notify_vsync(void)
 {
 	struct FPSGO_NOTIFIER_PUSH_TAG *vpPush;
 
+	fpsgo_mark_external_activity();
+
 	FPSGO_LOGI("[FPSGO_CTRL] vsync\n");
 
 	if (!fpsgo_is_enable())
@@ -475,6 +601,8 @@ void fpsgo_notify_vsync(void)
 void fpsgo_notify_swap_buffer(int pid)
 {
 	struct FPSGO_NOTIFIER_PUSH_TAG *vpPush;
+
+	fpsgo_mark_external_activity();
 
 	FPSGO_LOGI("[FPSGO_CTRL] swap_buffer\n");
 
@@ -512,6 +640,8 @@ int fpsgo_notify_gpu_block(int tid, unsigned long long mid, int begin)
 void fpsgo_notify_sbe_rescue(int pid, int start, int enhance)
 {
 	struct FPSGO_NOTIFIER_PUSH_TAG *vpPush;
+
+	fpsgo_mark_external_activity();
 
 	FPSGO_LOGI("[FPSGO_CTRL] sbe_rescue\n");
 
@@ -792,6 +922,9 @@ static void __exit fpsgo_exit(void)
 {
 	fpsgo_notifier_wq_cb_enable(0);
 
+	if (kfpsgo_autofeed_tsk)
+		kthread_stop(kfpsgo_autofeed_tsk);
+
 	if (kfpsgo_tsk)
 		kthread_stop(kfpsgo_tsk);
 
@@ -859,6 +992,14 @@ fail_reg_cpu_frequency_entry:
 	init_gbe_common();
 
 	fpsgo_switch_enable(1);
+
+	WRITE_ONCE(fpsgo_last_external_jiffies, 0);
+	kfpsgo_autofeed_tsk = kthread_create(kfpsgo_autofeed, NULL,
+		"kfps_auto");
+	if (IS_ERR(kfpsgo_autofeed_tsk))
+		kfpsgo_autofeed_tsk = NULL;
+	else
+		wake_up_process(kfpsgo_autofeed_tsk);
 
 	fpsgo_notify_vsync_fp = fpsgo_notify_vsync;
 

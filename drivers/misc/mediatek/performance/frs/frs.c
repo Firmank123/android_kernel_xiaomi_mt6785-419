@@ -43,6 +43,8 @@ static int eara_enable = 1;
 static DEFINE_MUTEX(pre_lock);
 static struct sock *frs_nl_sk;
 static int eara_pid = -1;
+static int frs_aosp_fallback = 1;
+module_param(frs_aosp_fallback, int, 0644);
 
 static void set_tfps_diff(int max_cnt, int *pid, unsigned long long *buf_id, int *tfps, int *diff)
 {
@@ -78,6 +80,7 @@ int pre_change_single_event(int pid, unsigned long long bufID,
 			int target_fps)
 {
 	struct _EARA_THRM_PACKAGE change_msg;
+	int local_eara_pid;
 	int ret = 0;
 
 	mutex_lock(&pre_lock);
@@ -85,7 +88,13 @@ int pre_change_single_event(int pid, unsigned long long bufID,
 		mutex_unlock(&pre_lock);
 		return -1;
 	}
+	local_eara_pid = eara_pid;
 	mutex_unlock(&pre_lock);
+
+	if (frs_aosp_fallback && local_eara_pid <= 0) {
+		eara2fstb_tfps_mdiff(pid, bufID, 0, target_fps);
+		return 0;
+	}
 
 	memset(&change_msg, 0, sizeof(struct _EARA_THRM_PACKAGE));
 	change_msg.request = 1;
@@ -100,6 +109,9 @@ int pre_change_single_event(int pid, unsigned long long bufID,
 int pre_change_event(void)
 {
 	struct _EARA_THRM_PACKAGE change_msg;
+	int local_eara_pid;
+	int fallback_diff[EARA_MAX_COUNT] = {0};
+	int i;
 	int ret = 0;
 
 	pr_debug("eara_enable %d\n", eara_enable);
@@ -108,11 +120,33 @@ int pre_change_event(void)
 		mutex_unlock(&pre_lock);
 		return -1;
 	}
+	local_eara_pid = eara_pid;
 	mutex_unlock(&pre_lock);
 	memset(&change_msg, 0, sizeof(struct _EARA_THRM_PACKAGE));
 	eara2fstb_get_tfps(EARA_MAX_COUNT, &(change_msg.is_camera), change_msg.pair_pid,
 			change_msg.pair_bufid, change_msg.pair_tfps, change_msg.pair_rfps,
 			change_msg.pair_hwui, change_msg.proc_name);
+
+	if (frs_aosp_fallback && local_eara_pid <= 0) {
+		for (i = 0; i < EARA_MAX_COUNT; i++) {
+			int diff;
+
+			if (!change_msg.pair_pid[i])
+				break;
+
+			diff = change_msg.pair_tfps[i] - change_msg.pair_rfps[i];
+			if (diff > 10)
+				diff = 10;
+			else if (diff < -10)
+				diff = -10;
+			fallback_diff[i] = diff;
+		}
+
+		set_tfps_diff(EARA_MAX_COUNT, change_msg.pair_pid,
+				change_msg.pair_bufid, change_msg.pair_tfps, fallback_diff);
+		return 0;
+	}
+
 	ret = eara_nl_send_to_user((void *)&change_msg, sizeof(struct _EARA_THRM_PACKAGE));
 
 	return ret;
