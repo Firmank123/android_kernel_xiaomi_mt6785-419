@@ -20,7 +20,9 @@
 
 static int frs_nl_id = 31;
 module_param(frs_nl_id, int, 0644);
-struct frs_info frs_data;
+struct frs_info frs_data = {
+	.enable = 1,
+};
 struct _EARA_THRM_PACKAGE {
 	__s32 type;
 	__s32 request;
@@ -40,7 +42,7 @@ struct _EARA_THRM_ENABLE {
 	__s32 pid;
 };
 
-static int eara_enable;
+static int eara_enable = 1;
 static DEFINE_MUTEX(pre_lock);
 static struct sock *frs_nl_sk;
 static int eara_pid = -1;
@@ -301,4 +303,3 @@ module_exit(eara_thrm_pre_exit);
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("MediaTek Frame Rate Smoother");
 MODULE_AUTHOR("MediaTek Inc.");
-

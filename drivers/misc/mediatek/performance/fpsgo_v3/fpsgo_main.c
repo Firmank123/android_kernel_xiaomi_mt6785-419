@@ -858,8 +858,7 @@ fail_reg_cpu_frequency_entry:
 	/* game boost engine*/
 	init_gbe_common();
 
-	if (fpsgo_arch_nr_clusters() > 0)
-		fpsgo_switch_enable(1);
+	fpsgo_switch_enable(1);
 
 	fpsgo_notify_vsync_fp = fpsgo_notify_vsync;
 
