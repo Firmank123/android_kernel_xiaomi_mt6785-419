@@ -11,16 +11,9 @@
 # GNU General Public License for more details.
 #
 
-ifeq ($(CONFIG_MACH_MT6785),y)
 ccflags-y += \
     -I$(srctree)/drivers/misc/mediatek/performance/fpsgo_v3/ \
     -I$(srctree)/drivers/misc/mediatek/performance/fpsgo_v3/mt-plat/ \
     -I$(srctree)/drivers/misc/mediatek/performance/fpsgo_v3/fstb/
-else
-ccflags-y += \
-    -I$(srctree)/drivers/misc/mediatek/performance/fpsgo_v3_topology/ \
-    -I$(srctree)/drivers/misc/mediatek/performance/fpsgo_v3_topology/mt-plat/ \
-    -I$(srctree)/drivers/misc/mediatek/performance/fpsgo_v3_topology/fstb/
-endif
 
 obj-$(CONFIG_MTK_FRS) += frs.o
