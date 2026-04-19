@@ -76,7 +76,7 @@ static int gpu_boost_enable_perf;
 static int gpu_boost_enable_camera;
 static int perfserv_ta;
 
-int powerhal_tid;
+extern int powerhal_tid;
 
 void (*rsu_cpufreq_notifier_fp)(int cluster_id, unsigned long freq);
 
@@ -499,6 +499,14 @@ void fpsgo_notify_swap_buffer(int pid)
 	vpPush->pid = pid;
 
 	fpsgo_queue_work(vpPush);
+}
+
+int fpsgo_notify_gpu_block(int tid, unsigned long long mid, int begin)
+{
+	(void)tid;
+	(void)mid;
+	(void)begin;
+	return -1;
 }
 
 void fpsgo_notify_sbe_rescue(int pid, int start, int enhance)

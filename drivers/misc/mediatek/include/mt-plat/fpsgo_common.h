@@ -44,6 +44,7 @@ enum {
 extern uint32_t fpsgo_systrace_mask;
 extern struct dentry *fpsgo_debugfs_dir;
 extern int game_ppid;
+extern int powerhal_tid;
 
 void __fpsgo_systrace_c(pid_t pid, unsigned long long bufID,
 	int value, const char *name, ...);
@@ -70,6 +71,8 @@ void __fpsgo_systrace_e(void);
 
 #define fpsgo_systrace_c_fbt_gm(pid, bufID, val, fmt...) \
 	fpsgo_systrace_c(FPSGO_DEBUG_FBT_GM, pid, bufID, val, fmt)
+#define fpsgo_systrace_c_fstb_man(pid, bufID, val, fmt...) \
+	fpsgo_systrace_c(FPSGO_DEBUG_MANDATORY, pid, bufID, val, fmt)
 #define fpsgo_systrace_c_fstb(pid, bufID, val, fmt...) \
 	fpsgo_systrace_c(FPSGO_DEBUG_FSTB, pid, bufID, val, fmt)
 #define fpsgo_systrace_c_xgf(pid, bufID, val, fmt...) \
@@ -84,6 +87,16 @@ void __fpsgo_systrace_e(void);
 
 #define fpsgo_systrace_c_fbt(pid, bufID, val, fmt...) \
 	fpsgo_systrace_c(FPSGO_DEBUG_MANDATORY, pid, bufID, val, fmt)
+#define fpsgo_systrace_c_fbt_debug(pid, bufID, val, fmt...) \
+	fpsgo_systrace_c_fbt(pid, bufID, val, fmt)
+#define gbe_trace_count(pid, bufID, val, fmt...) \
+	fpsgo_systrace_c(FPSGO_DEBUG_MANDATORY, pid, bufID, val, fmt)
+#define gbe_trace_count_debug(pid, bufID, val, fmt...) \
+	fpsgo_systrace_c(FPSGO_DEBUG_FBT_GM, pid, bufID, val, fmt)
+#define __cpu_ctrl_systrace(val, fmt...) \
+	fpsgo_systrace_c(FPSGO_DEBUG_MANDATORY, powerhal_tid, 0, val, fmt)
+#define __cpu_ctrl_systrace_debug(val, fmt...) \
+	fpsgo_systrace_c(FPSGO_DEBUG_FBT_GM, powerhal_tid, 0, val, fmt)
 
 int fpsgo_is_fstb_enable(void);
 int fpsgo_switch_fstb(int enable);
@@ -117,12 +130,20 @@ static inline void fpsgo_systrace_e(uint32_t m) { }
 
 static inline void fpsgo_systrace_c_fbt_gm(pid_t id,
 	unsigned long long bufID, int val, const char *s, ...) { }
+static inline void fpsgo_systrace_c_fstb_man(pid_t id,
+	unsigned long long bufID, int val, const char *s, ...) { }
+static inline void fpsgo_systrace_c_fbt_debug(pid_t id,
+	unsigned long long bufID, int val, const char *s, ...) { }
 static inline void fpsgo_systrace_c_fstb(pid_t id,
 	unsigned long long bufID, int val, const char *s, ...) { }
 static inline void fpsgo_systrace_c_xgf(pid_t id,
 	unsigned long long bufID, int val, const char *s, ...) { }
 static inline void fpsgo_systrace_c_log(pid_t id, int val,
 					const char *s, ...) { }
+static inline void gbe_trace_count(pid_t id,
+	unsigned long long bufID, int val, const char *s, ...) { }
+static inline void gbe_trace_count_debug(pid_t id,
+	unsigned long long bufID, int val, const char *s, ...) { }
 
 static inline int fpsgo_is_fstb_enable(void) { return 0; }
 static inline int fpsgo_switch_fstb(int en) { return 0; }
@@ -146,6 +167,8 @@ static inline int fbt_cpu_set_variance(int var) { return 0; }
 static inline int fbt_cpu_set_floor_bound(int bound) { return 0; }
 static inline int fbt_cpu_set_floor_kmin(int k) { return 0; }
 static inline int fbt_cpu_set_floor_opp(int new_opp) { return 0; }
+#define __cpu_ctrl_systrace(val, fmt...) do { } while (0)
+#define __cpu_ctrl_systrace_debug(val, fmt...) do { } while (0)
 #endif
 
 #if defined(CONFIG_MTK_FPSGO) || defined(CONFIG_MTK_FPSGO_V3)

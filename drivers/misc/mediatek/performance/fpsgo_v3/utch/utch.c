@@ -47,7 +47,7 @@ struct freq_qos_request *tchbst_rq;
 
 static int policy_num;
 
-int powerhal_tid;
+extern int powerhal_tid;
 
 
 /* local function */

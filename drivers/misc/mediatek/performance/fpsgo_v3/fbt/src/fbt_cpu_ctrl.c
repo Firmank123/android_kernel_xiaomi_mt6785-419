@@ -511,7 +511,8 @@ int fbt_set_cpu_freq_ceiling(int num, int *freq)
 	return 0;
 }
 
-void update_userlimit_cpu_freq(int kicker, int cluster_num, struct cpu_ctrl_data *pld)
+void fpsgo_update_userlimit_cpu_freq(int kicker, int cluster_num,
+		struct cpu_ctrl_data *pld)
 {
 	int *freq;
 	int i;

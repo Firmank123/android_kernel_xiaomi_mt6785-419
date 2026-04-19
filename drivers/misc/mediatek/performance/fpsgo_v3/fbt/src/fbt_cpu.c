@@ -809,7 +809,7 @@ static void fbt_set_ceiling(struct cpu_ctrl_data *pld,
 		return;
 
 	if (enable_ceiling) {
-		update_userlimit_cpu_freq(CPU_KIR_FPSGO, cluster_num, pld);
+		fpsgo_update_userlimit_cpu_freq(CPU_KIR_FPSGO, cluster_num, pld);
 
 		for (i = 0 ; i < cluster_num; i++)
 			fpsgo_systrace_c_fbt(pid, buffer_id, pld[i].max,
@@ -826,7 +826,7 @@ static void fbt_set_ceiling(struct cpu_ctrl_data *pld,
 			pld_release[i].min = -1;
 		}
 
-		update_userlimit_cpu_freq(CPU_KIR_FPSGO, cluster_num, pld_release);
+		fpsgo_update_userlimit_cpu_freq(CPU_KIR_FPSGO, cluster_num, pld_release);
 
 		for (i = 0 ; i < cluster_num; i++)
 			fpsgo_systrace_c_fbt(pid, buffer_id, -2,

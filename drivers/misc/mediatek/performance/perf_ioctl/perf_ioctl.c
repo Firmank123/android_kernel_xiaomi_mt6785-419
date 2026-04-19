@@ -20,6 +20,21 @@ void (*fpsgo_notify_bqid_fp)(int pid, unsigned long long bufID,
 		int queue_SF, unsigned long long identifier, int create);
 void (*fpsgo_notify_vsync_fp)(void);
 void (*fpsgo_get_fps_fp)(int *pid, int *fps);
+void (*fpsgo_get_cmd_fp)(int *cmd, int *value1, int *value2);
+int (*fpsgo_get_fstb_active_fp)(long long time_diff);
+int (*fpsgo_wait_fstb_active_fp)(void);
+void (*fpsgo_notify_sbe_rescue_fp)(int pid, int start, int enhance);
+
+int (*xgff_frame_startend_fp)(unsigned int startend,
+	unsigned int tid,
+	unsigned long long queueid,
+	unsigned long long frameid,
+	unsigned long long *cputime,
+	unsigned int *area,
+	unsigned int *pdeplistsize,
+	unsigned int *pdeplist);
+void (*xgff_frame_getdeplist_maxsize_fp)(unsigned int *pdeplistsize);
+
 void (*fpsgo_notify_nn_job_begin_fp)(unsigned int tid, unsigned long long mid);
 void (*fpsgo_notify_nn_job_end_fp)(int pid, int tid, unsigned long long mid,
 	int num_step, __s32 *boost, __s32 *device, __u64 *exec_time);
@@ -521,4 +536,3 @@ int init_perfctl(struct proc_dir_entry *parent)
 out_wq:
 	return ret_val;
 }
-
