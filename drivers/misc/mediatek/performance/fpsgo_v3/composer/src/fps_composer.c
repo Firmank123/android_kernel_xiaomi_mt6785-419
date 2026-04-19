@@ -13,8 +13,9 @@
 #include <linux/version.h>
 #include <linux/mutex.h>
 #include <linux/sched/task.h>
+#include <linux/sched.h>
 
-#include <mt-plat/fpsgo_common.h>
+#include "fpsgo_common.h"
 
 #include "fpsgo_base.h"
 #include "fpsgo_sysfs.h"
@@ -24,6 +25,8 @@
 #include "fstb.h"
 #include "xgf.h"
 #include "mini_top.h"
+#include "uboost.h"
+#include "gbe2.h"
 
 /*#define FPSGO_COM_DEBUG*/
 
@@ -178,8 +181,10 @@ static int fpsgo_com_refetch_buffer(struct render_info *f_render, int pid,
 
 	f_render->buffer_id = buffer_id;
 	f_render->queue_SF = queue_SF;
-	if (!f_render->pLoading || !f_render->p_blc)
+	if (!f_render->pLoading || !f_render->p_blc) {
 		fpsgo_base2fbt_node_init(f_render);
+		fpsgo_base2uboost_init(f_render);
+	}
 
 	FPSGO_COM_TRACE("%s: refetch %d: %llu, %llu, %d\n", __func__,
 				pid, identifier, buffer_id, queue_SF);
@@ -193,6 +198,7 @@ void fpsgo_ctrl2comp_enqueue_start(int pid,
 {
 	struct render_info *f_render;
 	int xgf_ret = 0;
+	int xgff_ret = 0;
 	int check_render;
 	int ret;
 
@@ -222,34 +228,25 @@ void fpsgo_ctrl2comp_enqueue_start(int pid,
 	if (!f_render->api && identifier) {
 		ret = fpsgo_com_refetch_buffer(f_render, pid, identifier, 1);
 		if (!ret) {
-			fpsgo_render_tree_unlock(__func__);
-			fpsgo_thread_unlock(&f_render->thr_mlock);
-			return;
+			goto exit;
 		}
 
 		ret = fpsgo_com_update_render_api_info(f_render);
 		if (!ret) {
-			fpsgo_render_tree_unlock(__func__);
-			fpsgo_thread_unlock(&f_render->thr_mlock);
-			return;
+			goto exit;
 		}
 	} else if (identifier) {
 		ret = fpsgo_com_refetch_buffer(f_render, pid, identifier, 1);
 		if (!ret) {
-			fpsgo_render_tree_unlock(__func__);
-			fpsgo_thread_unlock(&f_render->thr_mlock);
-			return;
+			goto exit;
 		}
 	}
-
-	fpsgo_render_tree_unlock(__func__);
 
 	if (f_render->api == NATIVE_WINDOW_API_CAMERA)
 		fpsgo_comp2fstb_camera_active(pid);
 
 	if (!f_render->queue_SF) {
-		fpsgo_thread_unlock(&f_render->thr_mlock);
-		return;
+		goto exit;
 	}
 
 	switch (f_render->frame_type) {
@@ -265,19 +262,25 @@ void fpsgo_ctrl2comp_enqueue_start(int pid,
 		xgf_ret =
 			fpsgo_comp2xgf_qudeq_notify(pid, f_render->buffer_id,
 					XGF_QUEUE_START, NULL, NULL,
-					enqueue_start_time);
+					enqueue_start_time, f_render->hwui);
+		xgff_ret =
+			xgff_frame_startend_fp(1, pid, f_render->buffer_id,
+			0, NULL, NULL, NULL, NULL);
+
 		break;
 	case BY_PASS_TYPE:
 		f_render->t_enqueue_start = enqueue_start_time;
 		fpsgo_comp2fbt_bypass_enq();
-		fpsgo_systrace_c_fbt_gm(-100, 0, 0, "%d-frame_time", pid);
+		fpsgo_systrace_c_fbt_debug(-100, 0, 0, "%d-frame_time", pid);
 		break;
 	default:
 		FPSGO_COM_TRACE("type not found pid[%d] type[%d]",
 			pid, f_render->frame_type);
 		break;
 	}
+exit:
 	fpsgo_thread_unlock(&f_render->thr_mlock);
+	fpsgo_render_tree_unlock(__func__);
 }
 
 void fpsgo_ctrl2comp_enqueue_end(int pid,
@@ -285,7 +288,14 @@ void fpsgo_ctrl2comp_enqueue_end(int pid,
 	unsigned long long identifier)
 {
 	struct render_info *f_render;
+	struct hwui_info *h_info;
+	struct video_info *video_render;
 	int xgf_ret = 0;
+	int xgff_ret = 0;
+	unsigned long long queue_cpu_time = 0;
+	unsigned int queue_area = 0;
+	unsigned int queue_dep_size = 20;
+	unsigned int queue_dep[20];
 	int check_render;
 	unsigned long long running_time = 0;
 	unsigned long long mid = 0;
@@ -314,16 +324,38 @@ void fpsgo_ctrl2comp_enqueue_end(int pid,
 
 	ret = fpsgo_com_refetch_buffer(f_render, pid, identifier, 0);
 	if (!ret) {
-		fpsgo_render_tree_unlock(__func__);
-		fpsgo_thread_unlock(&f_render->thr_mlock);
-		return;
+		goto exit;
 	}
 
-	fpsgo_render_tree_unlock(__func__);
+	/* hwui */
+	h_info = fpsgo_search_and_add_hwui_info(f_render->pid, 0);
+	if (h_info) {
+		f_render->hwui = RENDER_INFO_HWUI_TYPE;
+		if (f_render->pLoading)
+			f_render->pLoading->hwui = RENDER_INFO_HWUI_TYPE;
+	} else {
+		f_render->hwui = RENDER_INFO_HWUI_NONE;
+		if (f_render->pLoading)
+			f_render->pLoading->hwui = RENDER_INFO_HWUI_NONE;
+	}
+
+	/* video */
+	fpsgo_video_pid_tree_lock(__func__);
+	video_render = fstb_search_and_add_video_info(f_render->tgid, 0);
+	fpsgo_video_pid_tree_unlock(__func__);
+
+	/*
+	 *	Video Policy:
+	 *	if video hint && HWUI ==> HWUI policy
+	 *	if video hint && NON_HWUI (e.g. EGL) ==> VP Policy
+	 */
+	if (video_render)
+		f_render->video = RENDER_INFO_VIDEO_TYPE;
+	else
+		f_render->video = RENDER_INFO_VIDEO_NONE;
 
 	if (!f_render->queue_SF) {
-		fpsgo_thread_unlock(&f_render->thr_mlock);
-		return;
+		goto exit;
 	}
 
 	switch (f_render->frame_type) {
@@ -339,27 +371,39 @@ void fpsgo_ctrl2comp_enqueue_end(int pid,
 			pid, f_render->frame_type,
 			enqueue_end_time, f_render->enqueue_length);
 
+		fpsgo_comp2fstb_prepare_calculate_target_fps(pid, f_render->buffer_id,
+			f_render->t_dequeue_start, enqueue_end_time);
+
 		xgf_ret =
 			fpsgo_comp2xgf_qudeq_notify(pid, f_render->buffer_id,
 					XGF_QUEUE_END, &running_time, &mid,
-					enqueue_end_time);
+					enqueue_end_time, f_render->hwui);
+		xgff_ret =
+			xgff_frame_startend_fp(0, pid, f_render->buffer_id,
+			0, &queue_cpu_time, &queue_area, &queue_dep_size, queue_dep);
+		f_render->enqueue_length_real = f_render->enqueue_length > queue_cpu_time ?
+			f_render->enqueue_length - queue_cpu_time : 0;
+		fpsgo_systrace_c_fbt_debug(pid, f_render->buffer_id,
+			queue_cpu_time, "queue_cpu_time");
+		fpsgo_systrace_c_fbt_debug(pid, f_render->buffer_id,
+			f_render->enqueue_length_real, "enq_length_real");
 		if (running_time != 0)
 			f_render->running_time = running_time;
 		f_render->mid = mid;
 
 		fpsgo_comp2fbt_frame_start(f_render,
 				enqueue_end_time);
-
 		fpsgo_comp2fstb_queue_time_update(pid,
 			f_render->buffer_id,
 			f_render->frame_type,
 			enqueue_end_time,
-			f_render->api);
-		fpsgo_comp2fstb_enq_end(f_render->pid,
-			f_render->buffer_id,
-			f_render->enqueue_length);
+			f_render->api,
+			f_render->hwui,
+			f_render->video);
 		fpsgo_comp2minitop_queue_update(enqueue_end_time);
-		fpsgo_systrace_c_fbt_gm(-300, 0, f_render->enqueue_length,
+		fpsgo_comp2gbe_frame_update(f_render->pid, f_render->buffer_id);
+
+		fpsgo_systrace_c_fbt_debug(-300, 0, f_render->enqueue_length,
 			"%d_%d-enqueue_length", pid, f_render->frame_type);
 		break;
 	case BY_PASS_TYPE:
@@ -369,8 +413,9 @@ void fpsgo_ctrl2comp_enqueue_end(int pid,
 			pid, f_render->frame_type);
 		break;
 	}
+exit:
 	fpsgo_thread_unlock(&f_render->thr_mlock);
-
+	fpsgo_render_tree_unlock(__func__);
 }
 
 void fpsgo_ctrl2comp_dequeue_start(int pid,
@@ -421,16 +466,11 @@ void fpsgo_ctrl2comp_dequeue_start(int pid,
 
 	ret = fpsgo_com_refetch_buffer(f_render, pid, identifier, 0);
 	if (!ret) {
-		fpsgo_render_tree_unlock(__func__);
-		fpsgo_thread_unlock(&f_render->thr_mlock);
-		return;
+		goto exit;
 	}
 
-	fpsgo_render_tree_unlock(__func__);
-
 	if (!f_render->queue_SF) {
-		fpsgo_thread_unlock(&f_render->thr_mlock);
-		return;
+		goto exit;
 	}
 
 	switch (f_render->frame_type) {
@@ -441,7 +481,7 @@ void fpsgo_ctrl2comp_dequeue_start(int pid,
 		xgf_ret =
 			fpsgo_comp2xgf_qudeq_notify(pid, f_render->buffer_id,
 					XGF_DEQUEUE_START, NULL, NULL,
-					dequeue_start_time);
+					dequeue_start_time, f_render->hwui);
 		break;
 	case BY_PASS_TYPE:
 		break;
@@ -450,7 +490,9 @@ void fpsgo_ctrl2comp_dequeue_start(int pid,
 			pid, f_render->frame_type);
 		break;
 	}
+exit:
 	fpsgo_thread_unlock(&f_render->thr_mlock);
+	fpsgo_render_tree_unlock(__func__);
 
 }
 
@@ -496,16 +538,11 @@ void fpsgo_ctrl2comp_dequeue_end(int pid,
 
 	ret = fpsgo_com_refetch_buffer(f_render, pid, identifier, 0);
 	if (!ret) {
-		fpsgo_render_tree_unlock(__func__);
-		fpsgo_thread_unlock(&f_render->thr_mlock);
-		return;
+		goto exit;
 	}
 
-	fpsgo_render_tree_unlock(__func__);
-
 	if (!f_render->queue_SF) {
-		fpsgo_thread_unlock(&f_render->thr_mlock);
-		return;
+		goto exit;
 	}
 
 	switch (f_render->frame_type) {
@@ -519,9 +556,9 @@ void fpsgo_ctrl2comp_dequeue_end(int pid,
 			dequeue_end_time, f_render->dequeue_length);
 		xgf_ret =
 			fpsgo_comp2xgf_qudeq_notify(pid, f_render->buffer_id,
-				XGF_DEQUEUE_END, NULL, NULL, dequeue_end_time);
+				XGF_DEQUEUE_END, NULL, NULL, dequeue_end_time, f_render->hwui);
 		fpsgo_comp2fbt_deq_end(f_render, dequeue_end_time);
-		fpsgo_systrace_c_fbt_gm(-300, 0, f_render->dequeue_length,
+		fpsgo_systrace_c_fbt_debug(-300, 0, f_render->dequeue_length,
 			"%d_%d-dequeue_length", pid, f_render->frame_type);
 		break;
 	case BY_PASS_TYPE:
@@ -531,8 +568,9 @@ void fpsgo_ctrl2comp_dequeue_end(int pid,
 			pid, f_render->frame_type);
 		break;
 	}
+exit:
 	fpsgo_thread_unlock(&f_render->thr_mlock);
-
+	fpsgo_render_tree_unlock(__func__);
 }
 
 void fpsgo_ctrl2comp_connect_api(int pid, int api,
@@ -769,6 +807,7 @@ static ssize_t connect_api_info_show
 					pos->api, pos->frame_type);
 			posi += length;
 
+			fpsgo_thread_unlock(&pos->thr_mlock);
 
 		}
 
@@ -808,4 +847,3 @@ int __init fpsgo_composer_init(void)
 
 	return 0;
 }
-

@@ -24,7 +24,9 @@ obj-y += base/
 
 obj-$(CONFIG_MTK_PERF_OBSERVER) += observer/
 obj-$(CONFIG_MTK_RESYM) += resym/
+ifneq ($(CONFIG_MACH_MT6785),y)
 obj-$(CONFIG_MTK_GBE) += gbe/
+endif
 obj-y += syslimiter/
 
 #ifeq (,$(findstring mt8,$(CONFIG_MTK_PLATFORM)))
@@ -55,7 +57,7 @@ obj-$(CONFIG_MTK_FPSGO_V3) += fpsgo_v3_topology/
 else ifeq ($(CONFIG_MACH_MT6771),y)
 obj-$(CONFIG_MTK_FPSGO_V3) += fpsgo_v3_topology/
 else ifeq ($(CONFIG_MACH_MT6785),y)
-obj-$(CONFIG_MTK_FPSGO_V3) += fpsgo_v3_topology/
+obj-$(CONFIG_MTK_FPSGO_V3) += fpsgo_v3/
 else
 obj-$(CONFIG_MTK_FPSGO_V3) += fpsgo_v3/
 endif
@@ -69,4 +71,3 @@ endif
 
 obj-$(CONFIG_MTK_LOAD_TRACKER) += load_track/
 obj-$(CONFIG_MTK_LOAD_TRACKER) += uload_ind/
-
