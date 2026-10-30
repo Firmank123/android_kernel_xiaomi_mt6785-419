@@ -18,8 +18,13 @@ long compat_arm_syscall(struct pt_regs *regs, int scno);
 long sys_ni_syscall(void);
 
 #if defined(CONFIG_KSU) && defined(CONFIG_KSU_SYSCALL_TABLE_HOOK)
+extern long ksu_handle_execve_sucompat(const char __user **filename,
+				       int nr, const struct pt_regs *regs);
 extern long ksu_handle_execveat_sucompat_user(const char __user **filename,
 					       int nr, const struct pt_regs *regs);
+extern int ksu_handle_faccessat(int *dfd, const char __user **filename,
+				int *mode, int *flags);
+extern int ksu_handle_stat(int *dfd, const char __user **filename, int *flags);
 #endif
 
 static long do_ni_syscall(struct pt_regs *regs, int scno)
@@ -120,10 +125,28 @@ static void el0_svc_common(struct pt_regs *regs, int scno, int sc_nr,
 	}
 
 #if defined(CONFIG_KSU) && defined(CONFIG_KSU_SYSCALL_TABLE_HOOK)
-	/* The legacy table hook checks envp instead of flags for execveat. */
-	if (!is_compat_task() && scno == __NR_execveat && regs->regs[3])
-		ksu_handle_execveat_sucompat_user(
-			(const char __user **)&regs->regs[1], scno, regs);
+	if (!is_compat_task()) {
+		switch (scno) {
+		case __NR_execve:
+			ksu_handle_execve_sucompat(
+				(const char __user **)&regs->regs[0], scno, regs);
+			break;
+		case __NR_execveat:
+			ksu_handle_execveat_sucompat_user(
+				(const char __user **)&regs->regs[1], scno, regs);
+			break;
+		case __NR_faccessat:
+			ksu_handle_faccessat((int *)&regs->regs[0],
+				(const char __user **)&regs->regs[1],
+				(int *)&regs->regs[2], NULL);
+			break;
+		case __NR_newfstatat:
+			ksu_handle_stat((int *)&regs->regs[0],
+				(const char __user **)&regs->regs[1],
+				(int *)&regs->regs[3]);
+			break;
+		}
+	}
 #endif
 	invoke_syscall(regs, scno, sc_nr, syscall_table);
 
