@@ -226,4 +226,10 @@ source "drivers/slimbus/Kconfig"
 source "drivers/interconnect/Kconfig"
 
 source "drivers/energy_model/Kconfig"
+
+config KSU
+	tristate
+	default n
+
+source "drivers/kernelsu/Kconfig"
 endmenu
