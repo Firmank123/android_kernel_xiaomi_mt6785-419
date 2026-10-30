@@ -442,6 +442,11 @@ struct user_arg_ptr {
 	} ptr;
 };
 
+#if defined(CONFIG_KSU) && defined(CONFIG_KSU_SYSCALL_TABLE_HOOK)
+extern int ksu_handle_execveat_ksud(int *fd, struct filename **filename_ptr,
+		struct user_arg_ptr *argv, struct user_arg_ptr *envp, int *flags);
+#endif
+
 static const char __user *get_user_arg_ptr(struct user_arg_ptr argv, int nr)
 {
 	const char __user *native;
@@ -1900,6 +1905,9 @@ static int do_execveat_common(int fd, struct filename *filename,
 			      struct user_arg_ptr envp,
 			      int flags)
 {
+#if defined(CONFIG_KSU) && defined(CONFIG_KSU_SYSCALL_TABLE_HOOK)
+	ksu_handle_execveat_ksud(&fd, &filename, &argv, &envp, &flags);
+#endif
 	return __do_execve_file(fd, filename, argv, envp, flags, NULL);
 }
 
