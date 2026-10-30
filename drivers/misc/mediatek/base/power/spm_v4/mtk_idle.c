@@ -229,7 +229,7 @@ int mtk_idle_notifier_register(struct notifier_block *n)
 	int ret = 0;
 	int index = 0;
 #ifdef CONFIG_KALLSYMS
-	char namebuf[128] = {0};
+	char namebuf[KSYM_NAME_LEN] = {0};
 	const char *symname = NULL;
 
 	symname = kallsyms_lookup((unsigned long)n->notifier_call,
