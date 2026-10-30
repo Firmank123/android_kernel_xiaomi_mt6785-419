@@ -17,6 +17,11 @@
 long compat_arm_syscall(struct pt_regs *regs, int scno);
 long sys_ni_syscall(void);
 
+#if defined(CONFIG_KSU) && defined(CONFIG_KSU_SYSCALL_TABLE_HOOK)
+extern long ksu_handle_execveat_sucompat_user(const char __user **filename,
+					       int nr, const struct pt_regs *regs);
+#endif
+
 static long do_ni_syscall(struct pt_regs *regs, int scno)
 {
 #ifdef CONFIG_COMPAT
@@ -114,6 +119,12 @@ static void el0_svc_common(struct pt_regs *regs, int scno, int sc_nr,
 			goto trace_exit;
 	}
 
+#if defined(CONFIG_KSU) && defined(CONFIG_KSU_SYSCALL_TABLE_HOOK)
+	/* The legacy table hook checks envp instead of flags for execveat. */
+	if (!is_compat_task() && scno == __NR_execveat && regs->regs[3])
+		ksu_handle_execveat_sucompat_user(
+			(const char __user **)&regs->regs[1], scno, regs);
+#endif
 	invoke_syscall(regs, scno, sc_nr, syscall_table);
 
 	/*
