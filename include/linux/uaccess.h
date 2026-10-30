@@ -303,7 +303,12 @@ copy_struct_from_user(void *dst, size_t ksize, const void __user *src,
 bool copy_from_kernel_nofault_allowed(const void *unsafe_src, size_t size);
 
 long copy_from_kernel_nofault(void *dst, const void *src, size_t size);
-long notrace copy_to_kernel_nofault(void *dst, const void *src, size_t size);
+/* Older callers may define copy_to_kernel_nofault as a compatibility macro. */
+long notrace (copy_to_kernel_nofault)(void *dst, const void *src, size_t size);
+#ifdef copy_to_kernel_nofault
+#define probe_kernel_write(dst, src, size) \
+	(copy_to_kernel_nofault)((dst), (src), (size))
+#endif
 
 long copy_from_user_nofault(void *dst, const void __user *src, size_t size);
 long notrace copy_to_user_nofault(void __user *dst, const void *src,
