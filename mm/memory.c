@@ -63,6 +63,7 @@
 #include <linux/elf.h>
 #include <linux/gfp.h>
 #include <linux/migrate.h>
+#include <linux/swap_cgroup.h>
 #include <linux/string.h>
 #include <linux/dma-debug.h>
 #include <linux/debugfs.h>
@@ -2858,6 +2859,36 @@ EXPORT_SYMBOL(unmap_mapping_range);
  * We return with the mmap_sem locked or unlocked in the same cases
  * as does filemap_fault().
  */
+static void count_swapin_anon_cost(struct page *page, swp_entry_t entry,
+				   struct mem_cgroup *charged_memcg)
+{
+	struct pglist_data *pgdat = page_pgdat(page);
+	struct mem_cgroup *memcg;
+	struct lruvec *lruvec;
+	unsigned short id;
+
+	if (!mem_cgroup_disabled()) {
+		id = lookup_swap_cgroup_id(entry);
+		if (id) {
+			memcg = mem_cgroup_get_swap_owner(id);
+			if (memcg) {
+				lruvec = mem_cgroup_lruvec(pgdat, memcg);
+				mod_lruvec_state(lruvec, WORKINGSET_RESTORE_ANON,
+						 hpage_nr_pages(page));
+				mem_cgroup_put(memcg);
+				return;
+			}
+		}
+	}
+
+	if (charged_memcg)
+		lruvec = mem_cgroup_lruvec(pgdat, charged_memcg);
+	else
+		lruvec = node_lruvec(pgdat);
+	mod_lruvec_state(lruvec, WORKINGSET_RESTORE_ANON,
+			 hpage_nr_pages(page));
+}
+
 vm_fault_t do_swap_page(struct vm_fault *vmf)
 {
 	struct vm_area_struct *vma = vmf->vma;
@@ -2985,6 +3016,8 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 		ret = VM_FAULT_OOM;
 		goto out_page;
 	}
+	if (sync_page)
+		count_swapin_anon_cost(page, entry, memcg);
 	if (page == sync_page)
 		ClearPageSwapCache(page);
 

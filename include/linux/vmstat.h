@@ -194,6 +194,13 @@ static inline unsigned long global_node_page_state(enum node_stat_item item)
 	return x;
 }
 
+/* Raw reader for monotonically increasing counters sampled by unsigned delta. */
+static inline unsigned long
+global_node_page_state_monotonic(enum node_stat_item item)
+{
+	return (unsigned long)atomic_long_read(&vm_node_stat[item]);
+}
+
 static inline unsigned long zone_page_state(struct zone *zone,
 					enum zone_stat_item item)
 {
@@ -234,9 +241,13 @@ extern unsigned long sum_zone_node_page_state(int node,
 extern unsigned long sum_zone_numa_state(int node, enum numa_stat_item item);
 extern unsigned long node_page_state(struct pglist_data *pgdat,
 						enum node_stat_item item);
+unsigned long node_page_state_monotonic(struct pglist_data *pgdat,
+					enum node_stat_item item);
 #else
 #define sum_zone_node_page_state(node, item) global_zone_page_state(item)
 #define node_page_state(node, item) global_node_page_state(item)
+#define node_page_state_monotonic(node, item) \
+	global_node_page_state_monotonic(item)
 #endif /* CONFIG_NUMA */
 
 #define add_zone_page_state(__z, __i, __d) mod_zone_page_state(__z, __i, __d)
