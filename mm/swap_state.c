@@ -21,6 +21,7 @@
 #include <linux/vmalloc.h>
 #include <linux/swap_slots.h>
 #include <linux/huge_mm.h>
+#include <linux/memcontrol.h>
 
 #include <linux/pgtable.h>
 #include "internal.h"
@@ -380,6 +381,7 @@ struct page *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 			bool *new_page_allocated)
 {
 	struct page *found_page, *new_page = NULL;
+	struct mem_cgroup *memcg;
 	struct address_space *swapper_space = swap_address_space(entry);
 	int err;
 	*new_page_allocated = false;
@@ -446,6 +448,13 @@ struct page *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 		err = __add_to_swap_cache(new_page, entry);
 		if (likely(!err)) {
 			radix_tree_preload_end();
+			/* Charge to the swap owner before the page reaches the LRU. */
+			if (mem_cgroup_try_charge_delay(new_page, NULL, gfp_mask,
+							&memcg, false)) {
+				delete_from_swap_cache(new_page);
+				goto fail_unlock;
+			}
+			mem_cgroup_commit_charge(new_page, memcg, false, false);
 			/*
 			 * Initiate read into locked page and return.
 			 */
@@ -466,6 +475,11 @@ struct page *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 	if (new_page)
 		put_page(new_page);
 	return found_page;
+
+fail_unlock:
+	unlock_page(new_page);
+	put_page(new_page);
+	return NULL;
 }
 
 /*
