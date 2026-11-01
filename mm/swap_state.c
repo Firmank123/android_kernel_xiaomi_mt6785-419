@@ -455,6 +455,8 @@ struct page *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 				goto fail_unlock;
 			}
 			mem_cgroup_commit_charge(new_page, memcg, false, false);
+			mod_lruvec_page_state(new_page, WORKINGSET_RESTORE_ANON,
+					      hpage_nr_pages(new_page));
 			/*
 			 * Initiate read into locked page and return.
 			 */

@@ -310,6 +310,9 @@ void *workingset_eviction(struct address_space *mapping, struct page *page,
 			  struct mem_cgroup *target_memcg);
 void workingset_refault(struct page *page, void *shadow);
 void workingset_activation(struct page *page);
+void workingset_age_nonresident(struct lruvec *lruvec,
+				struct pglist_data *pgdat,
+				unsigned long nr_pages);
 
 /* Only track the nodes of mappings with shadow entries */
 void workingset_update_node(struct xa_node *node);

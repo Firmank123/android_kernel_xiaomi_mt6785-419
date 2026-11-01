@@ -998,6 +998,12 @@ unsigned long node_page_state(struct pglist_data *pgdat,
 #endif
 	return x;
 }
+
+unsigned long node_page_state_monotonic(struct pglist_data *pgdat,
+					enum node_stat_item item)
+{
+	return (unsigned long)atomic_long_read(&pgdat->vm_stat[item]);
+}
 #endif
 
 #ifdef CONFIG_COMPACTION
@@ -1149,6 +1155,9 @@ const char * const vmstat_text[] = {
 	"workingset_refault",
 	"workingset_activate",
 	"workingset_restore",
+	"workingset_restore_anon",
+	"pgrotate_anon",
+	"pgrotate_file",
 	"workingset_nodereclaim",
 	"nr_anon_pages",
 	"nr_mapped",
@@ -1162,6 +1171,8 @@ const char * const vmstat_text[] = {
 	"nr_anon_transparent_hugepages",
 	"nr_unstable",
 	"nr_vmscan_write",
+	"nr_vmscan_write_anon",
+	"nr_vmscan_write_file",
 	"nr_vmscan_immediate_reclaim",
 	"nr_dirtied",
 	"nr_written",

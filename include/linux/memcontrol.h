@@ -534,6 +534,7 @@ static inline unsigned short mem_cgroup_id(struct mem_cgroup *memcg)
 	return memcg->id.id;
 }
 struct mem_cgroup *mem_cgroup_from_id(unsigned short id);
+struct mem_cgroup *mem_cgroup_get_swap_owner(unsigned short id);
 
 static inline struct mem_cgroup *lruvec_memcg(struct lruvec *lruvec)
 {
@@ -558,6 +559,23 @@ static inline struct mem_cgroup *parent_mem_cgroup(struct mem_cgroup *memcg)
 	if (!memcg->memory.parent)
 		return NULL;
 	return mem_cgroup_from_counter(memcg->memory.parent, memory);
+}
+
+static inline struct lruvec *parent_lruvec(struct lruvec *lruvec)
+{
+	struct mem_cgroup *memcg;
+
+	if (mem_cgroup_disabled())
+		return NULL;
+
+	memcg = lruvec_memcg(lruvec);
+	if (!memcg)
+		return NULL;
+	memcg = parent_mem_cgroup(memcg);
+	if (!memcg)
+		return NULL;
+
+	return mem_cgroup_lruvec(lruvec_pgdat(lruvec), memcg);
 }
 
 static inline bool mem_cgroup_is_descendant(struct mem_cgroup *memcg,
@@ -757,6 +775,19 @@ static inline unsigned long lruvec_page_state(struct lruvec *lruvec,
 		x = 0;
 #endif
 	return x;
+}
+
+static inline unsigned long
+lruvec_page_state_monotonic(struct lruvec *lruvec, struct pglist_data *pgdat,
+			    enum node_stat_item idx)
+{
+	struct mem_cgroup_per_node *pn;
+
+	if (mem_cgroup_disabled() || lruvec == node_lruvec(pgdat))
+		return node_page_state_monotonic(pgdat, idx);
+
+	pn = container_of(lruvec, struct mem_cgroup_per_node, lruvec);
+	return (unsigned long)atomic_long_read(&pn->lruvec_stat[idx]);
 }
 
 static inline unsigned long lruvec_page_state_local(struct lruvec *lruvec,
@@ -1065,7 +1096,18 @@ static inline struct mem_cgroup *mem_cgroup_from_id(unsigned short id)
 	return NULL;
 }
 
+static inline struct mem_cgroup *
+mem_cgroup_get_swap_owner(unsigned short id)
+{
+	return NULL;
+}
+
 static inline struct mem_cgroup *lruvec_memcg(struct lruvec *lruvec)
+{
+	return NULL;
+}
+
+static inline struct lruvec *parent_lruvec(struct lruvec *lruvec)
 {
 	return NULL;
 }
@@ -1189,6 +1231,13 @@ static inline unsigned long lruvec_page_state(struct lruvec *lruvec,
 					      enum node_stat_item idx)
 {
 	return node_page_state(lruvec_pgdat(lruvec), idx);
+}
+
+static inline unsigned long
+lruvec_page_state_monotonic(struct lruvec *lruvec, struct pglist_data *pgdat,
+			    enum node_stat_item idx)
+{
+	return node_page_state_monotonic(pgdat, idx);
 }
 
 static inline unsigned long lruvec_page_state_local(struct lruvec *lruvec,

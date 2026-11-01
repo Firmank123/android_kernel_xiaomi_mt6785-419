@@ -170,6 +170,9 @@ enum node_stat_item {
 	WORKINGSET_REFAULT,
 	WORKINGSET_ACTIVATE,
 	WORKINGSET_RESTORE,
+	WORKINGSET_RESTORE_ANON,
+	PGROTATE_ANON,
+	PGROTATE_FILE,
 	WORKINGSET_NODERECLAIM,
 	NR_ANON_MAPPED,	/* Mapped anonymous pages */
 	NR_FILE_MAPPED,	/* pagecache pages mapped into pagetables.
@@ -184,6 +187,8 @@ enum node_stat_item {
 	NR_ANON_THPS,
 	NR_UNSTABLE_NFS,	/* NFS unstable pages */
 	NR_VMSCAN_WRITE,
+	NR_VMSCAN_WRITE_ANON,
+	NR_VMSCAN_WRITE_FILE,
 	NR_VMSCAN_IMMEDIATE,	/* Prioritise for reclaim when writeback ends */
 	NR_DIRTIED,		/* page dirtyings since bootup */
 	NR_WRITTEN,		/* page writings since bootup */
@@ -231,24 +236,26 @@ static inline int is_active_lru(enum lru_list lru)
 	return (lru == LRU_ACTIVE_ANON || lru == LRU_ACTIVE_FILE);
 }
 
-struct zone_reclaim_stat {
-	/*
-	 * The pageout code in vmscan.c keeps track of how many of the
-	 * mem/swap backed and file backed pages are referenced.
-	 * The higher the rotated/scanned ratio, the more valuable
-	 * that cache is.
-	 *
-	 * The anon LRU stats live in [0], file LRU stats in [1]
-	 */
-	unsigned long		recent_rotated[2];
-	unsigned long		recent_scanned[2];
+enum lru_cost_type {
+	LRU_COST_ANON,
+	LRU_COST_FILE,
+	NR_LRU_COST_TYPES,
+};
+
+struct lru_cost {
+	unsigned long count;
+	unsigned long last_rotated;
+	unsigned long last_restore;
+	unsigned long last_write;
 };
 
 struct lruvec {
 	struct list_head		lists[NR_LRU_LISTS];
-	struct zone_reclaim_stat	reclaim_stat;
-	/* Evictions & activations on the inactive file list */
-	atomic_long_t			inactive_age;
+	struct lru_cost		cost[NR_LRU_COST_TYPES];
+	/* Serializes read-side cost sampling and decay. */
+	spinlock_t			cost_lock;
+	/* Non-resident age, driven by LRU movement */
+	atomic_long_t		nonresident_age;
 	/* Refaults at the time of last reclaim cycle */
 	unsigned long			refaults;
 #ifdef CONFIG_MEMCG

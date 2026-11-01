@@ -156,8 +156,8 @@
  *
  *		Implementation
  *
- * For each node's file LRU lists, a counter for inactive evictions
- * and activations is maintained (node->inactive_age).
+ * For each node's LRU lists, a counter for evictions and activations
+ * is maintained (node->nonresident_age).
  *
  * On eviction, a snapshot of this counter (along with some bits to
  * identify the node) is stored in the now empty page cache
@@ -213,22 +213,21 @@ static void unpack_shadow(void *shadow, int *memcgidp, pg_data_t **pgdat,
 	*workingsetp = workingset;
 }
 
-static void advance_inactive_age(struct mem_cgroup *memcg,
-				 pg_data_t *pgdat)
+void workingset_age_nonresident(struct lruvec *lruvec,
+				struct pglist_data *pgdat,
+				unsigned long nr_pages)
 {
-#ifdef CONFIG_MEMCG
-	if (!mem_cgroup_disabled()) {
-		while (memcg) {
-			struct lruvec *lruvec = mem_cgroup_lruvec(pgdat, memcg);
-
-			atomic_long_inc(&lruvec->inactive_age);
-			memcg = parent_mem_cgroup(memcg);
-		}
+	if (mem_cgroup_disabled() || lruvec == node_lruvec(pgdat)) {
+		atomic_long_add(nr_pages, &node_lruvec(pgdat)->nonresident_age);
+		return;
 	}
-#endif
+
+	do {
+		atomic_long_add(nr_pages, &lruvec->nonresident_age);
+	} while ((lruvec = parent_lruvec(lruvec)));
 
 	/* Global reclaim spans all memcgs, including v1 hierarchy-off groups. */
-	atomic_long_inc(&node_lruvec(pgdat)->inactive_age);
+	atomic_long_add(nr_pages, &node_lruvec(pgdat)->nonresident_age);
 }
 
 /**
@@ -254,7 +253,11 @@ void *workingset_eviction(struct address_space *mapping, struct page *page,
 	VM_BUG_ON_PAGE(page_count(page), page);
 	VM_BUG_ON_PAGE(!PageLocked(page), page);
 
-	advance_inactive_age(memcg, pgdat);
+	if (memcg)
+		lruvec = mem_cgroup_lruvec(pgdat, memcg);
+	else
+		lruvec = node_lruvec(pgdat);
+	workingset_age_nonresident(lruvec, pgdat, hpage_nr_pages(page));
 
 	/* ID zero identifies the node-wide global reclaim domain. */
 	memcgid = target_memcg && !mem_cgroup_disabled() ?
@@ -263,7 +266,7 @@ void *workingset_eviction(struct address_space *mapping, struct page *page,
 		lruvec = mem_cgroup_lruvec(pgdat, target_memcg);
 	else
 		lruvec = node_lruvec(pgdat);
-	eviction = atomic_long_read(&lruvec->inactive_age);
+	eviction = atomic_long_read(&lruvec->nonresident_age);
 	return pack_shadow(memcgid, pgdat, eviction, PageWorkingset(page));
 }
 
@@ -279,7 +282,7 @@ void workingset_refault(struct page *page, void *shadow)
 {
 	unsigned long refault_distance;
 	struct pglist_data *pgdat;
-	unsigned long active_file;
+	unsigned long workingset_size;
 	struct mem_cgroup *memcg;
 	struct mem_cgroup *eviction_memcg;
 	unsigned long eviction;
@@ -310,12 +313,35 @@ void workingset_refault(struct page *page, void *shadow)
 		if (!mem_cgroup_disabled() && !eviction_memcg)
 			goto out;
 		eviction_lruvec = mem_cgroup_lruvec(pgdat, eviction_memcg);
-		refault = atomic_long_read(&eviction_lruvec->inactive_age);
-		active_file = lruvec_page_state(eviction_lruvec, NR_ACTIVE_FILE);
+		refault = atomic_long_read(&eviction_lruvec->nonresident_age);
+		workingset_size = lruvec_page_state(eviction_lruvec, NR_ACTIVE_FILE);
 	} else {
 		eviction_lruvec = node_lruvec(pgdat);
-		refault = atomic_long_read(&eviction_lruvec->inactive_age);
-		active_file = node_page_state(pgdat, NR_ACTIVE_FILE);
+		refault = atomic_long_read(&eviction_lruvec->nonresident_age);
+		workingset_size = node_page_state(pgdat, NR_ACTIVE_FILE);
+	}
+	if ((memcgid && mem_cgroup_get_nr_swap_pages(eviction_memcg) > 0) ||
+	    (!memcgid && get_nr_swap_pages() > 0)) {
+		unsigned long anon_pages;
+		unsigned long active_anon;
+
+		if (memcgid) {
+			anon_pages = lruvec_page_state(eviction_lruvec,
+						       NR_INACTIVE_ANON);
+			active_anon = lruvec_page_state(eviction_lruvec,
+							NR_ACTIVE_ANON);
+		} else {
+			anon_pages = node_page_state(pgdat, NR_INACTIVE_ANON);
+			active_anon = node_page_state(pgdat, NR_ACTIVE_ANON);
+		}
+		if (~0UL - anon_pages < active_anon)
+			anon_pages = ~0UL;
+		else
+			anon_pages += active_anon;
+		if (~0UL - workingset_size < anon_pages)
+			workingset_size = ~0UL;
+		else
+			workingset_size += anon_pages;
 	}
 
 	/* Refault ownership follows the page; distance follows the reclaim root. */
@@ -331,11 +357,11 @@ void workingset_refault(struct page *page, void *shadow)
 	 * Calculate the refault distance
 	 *
 	 * The unsigned subtraction here gives an accurate distance
-	 * across inactive_age overflows in most cases. There is a
+	 * across nonresident_age overflows in most cases. There is a
 	 * special case: usually, shadow entries have a short lifetime
 	 * and are either refaulted or reclaimed along with the inode
 	 * before they get too old.  But it is not impossible for the
-	 * inactive_age to lap a shadow entry in the field, which can
+	 * nonresident_age to lap a shadow entry in the field, which can
 	 * then result in a false small refault distance, leading to a
 	 * false activation should this old entry actually refault
 	 * again.  However, earlier kernels used to deactivate
@@ -352,17 +378,18 @@ void workingset_refault(struct page *page, void *shadow)
 	 * don't act on pages that couldn't stay resident even if all
 	 * the memory was available to the page cache.
 	 */
-	if (refault_distance > active_file)
+	if (refault_distance > workingset_size)
 		goto out;
 
 	SetPageActive(page);
-	advance_inactive_age(memcg, pgdat);
+	workingset_age_nonresident(lruvec, pgdat, hpage_nr_pages(page));
 	inc_lruvec_state(lruvec, WORKINGSET_ACTIVATE);
 
 	/* Page was active prior to eviction */
 	if (workingset) {
 		SetPageWorkingset(page);
-		inc_lruvec_state(lruvec, WORKINGSET_RESTORE);
+		mod_lruvec_state(lruvec, WORKINGSET_RESTORE,
+				 hpage_nr_pages(page));
 	}
 out:
 	rcu_read_unlock();
@@ -375,6 +402,7 @@ out:
 void workingset_activation(struct page *page)
 {
 	struct mem_cgroup *memcg;
+	struct lruvec *lruvec;
 
 	rcu_read_lock();
 	/*
@@ -387,7 +415,12 @@ void workingset_activation(struct page *page)
 	memcg = page_memcg_rcu(page);
 	if (!mem_cgroup_disabled() && !memcg)
 		goto out;
-	advance_inactive_age(memcg, page_pgdat(page));
+	if (memcg)
+		lruvec = mem_cgroup_lruvec(page_pgdat(page), memcg);
+	else
+		lruvec = node_lruvec(page_pgdat(page));
+	workingset_age_nonresident(lruvec, page_pgdat(page),
+				   hpage_nr_pages(page));
 out:
 	rcu_read_unlock();
 }
