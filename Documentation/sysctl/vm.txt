@@ -824,13 +824,25 @@ tooling to work, you can do:
 
 swappiness
 
-This control is used to define how aggressive the kernel will swap
-memory pages.  Higher values will increase aggressiveness, lower values
-decrease the amount of swap.  A value of 0 instructs the kernel not to
-initiate swap until the amount of free and file-backed pages is less
-than the high water mark in a zone.
+This control is used to define the rough relative IO cost of swapping
+and filesystem paging, as a value between 0 and 200. At 100, the VM
+assumes equal IO cost and will thus apply memory pressure to the page
+cache and swap-backed pages equally; lower values signify more
+expensive swap IO, higher values indicate cheaper swap IO.
+
+Filesystem IO patterns under memory pressure tend to be more efficient
+than swap's random IO. An optimal value requires experimentation and is
+workload-dependent. Values above 100 can be considered when swap is
+faster than filesystem paging, but this range is a capability and does
+not imply a recommended value for a particular device.
 
 The default value is 60.
+
+At 0, ordinary proportional reclaim gives anonymous pages no scan weight.
+Global reclaim can still scan anonymous pages through its cache-trap and
+OOM safeguards, so 0 is not an absolute guarantee against reclaiming them.
+In cgroup v1, setting a non-root memory cgroup's swappiness to 0 selects
+file-only reclaim for that cgroup.
 
 ==============================================================
 
