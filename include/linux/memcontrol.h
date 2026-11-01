@@ -101,6 +101,11 @@ struct mem_cgroup_stat_cpu {
 	unsigned long targets[MEM_CGROUP_NTARGETS];
 };
 
+struct mem_cgroup_stat_cpu_local {
+	long count[MEMCG_NR_STAT];
+	unsigned long events[NR_VM_EVENT_ITEMS];
+};
+
 struct mem_cgroup_reclaim_iter {
 	struct mem_cgroup *position;
 	/* scan generation, increased every round-trip */
@@ -126,6 +131,7 @@ struct memcg_shrinker_map {
 struct mem_cgroup_per_node {
 	struct lruvec		lruvec;
 
+	struct lruvec_stat __percpu *lruvec_stat_local;
 	struct lruvec_stat __percpu *lruvec_stat_cpu;
 	atomic_long_t		lruvec_stat[NR_VM_NODE_STAT_ITEMS];
 
@@ -273,7 +279,10 @@ struct mem_cgroup {
 	atomic_t		moving_account;
 	struct task_struct	*move_lock_task;
 
-	/* memory.stat */
+	/* Local VM stats and events */
+	struct mem_cgroup_stat_cpu_local __percpu *stat_cpu_local;
+
+	/* Subtree VM stats and events */
 	struct mem_cgroup_stat_cpu __percpu *stat_cpu;
 
 	MEMCG_PADDING(_pad2_);
@@ -655,10 +664,7 @@ struct mem_cgroup *lock_page_memcg(struct page *page);
 void __unlock_page_memcg(struct mem_cgroup *memcg);
 void unlock_page_memcg(struct page *page);
 
-/*
- * idx can be of type enum memcg_stat_item or node_stat_item.
- * Keep in sync with memcg_exact_page_state().
- */
+/* Read a batched statistic propagated from this cgroup's accounting subtree. */
 static inline unsigned long memcg_page_state(struct mem_cgroup *memcg,
 					     int idx)
 {
@@ -670,22 +676,22 @@ static inline unsigned long memcg_page_state(struct mem_cgroup *memcg,
 	return x;
 }
 
-/* idx can be of type enum memcg_stat_item or node_stat_item */
-static inline void __mod_memcg_state(struct mem_cgroup *memcg,
-				     int idx, int val)
+static inline unsigned long memcg_page_state_local(struct mem_cgroup *memcg,
+						   int idx)
 {
-	long x;
+	long x = 0;
+	int cpu;
 
-	if (mem_cgroup_disabled())
-		return;
-
-	x = val + __this_cpu_read(memcg->stat_cpu->count[idx]);
-	if (unlikely(abs(x) > MEMCG_CHARGE_BATCH)) {
-		atomic_long_add(x, &memcg->stat[idx]);
+	for_each_possible_cpu(cpu)
+		x += per_cpu(memcg->stat_cpu_local->count[idx], cpu);
+#ifdef CONFIG_SMP
+	if (x < 0)
 		x = 0;
-	}
-	__this_cpu_write(memcg->stat_cpu->count[idx], x);
+#endif
+	return x;
 }
+
+void __mod_memcg_state(struct mem_cgroup *memcg, int idx, int val);
 
 /* idx can be of type enum memcg_stat_item or node_stat_item */
 static inline void mod_memcg_state(struct mem_cgroup *memcg,
@@ -733,6 +739,7 @@ static inline void mod_memcg_page_state(struct page *page,
 		mod_memcg_state(memcg, idx, val);
 }
 
+/* Read a batched statistic propagated from this lruvec's accounting subtree. */
 static inline unsigned long lruvec_page_state(struct lruvec *lruvec,
 					      enum node_stat_item idx)
 {
@@ -751,31 +758,28 @@ static inline unsigned long lruvec_page_state(struct lruvec *lruvec,
 	return x;
 }
 
-static inline void __mod_lruvec_state(struct lruvec *lruvec,
-				      enum node_stat_item idx, int val)
+static inline unsigned long lruvec_page_state_local(struct lruvec *lruvec,
+						    enum node_stat_item idx)
 {
 	struct mem_cgroup_per_node *pn;
-	long x;
-
-	/* Update node */
-	__mod_node_page_state(lruvec_pgdat(lruvec), idx, val);
+	long x = 0;
+	int cpu;
 
 	if (mem_cgroup_disabled())
-		return;
+		return node_page_state(lruvec_pgdat(lruvec), idx);
 
 	pn = container_of(lruvec, struct mem_cgroup_per_node, lruvec);
-
-	/* Update memcg */
-	__mod_memcg_state(pn->memcg, idx, val);
-
-	/* Update lruvec */
-	x = val + __this_cpu_read(pn->lruvec_stat_cpu->count[idx]);
-	if (unlikely(abs(x) > MEMCG_CHARGE_BATCH)) {
-		atomic_long_add(x, &pn->lruvec_stat[idx]);
+	for_each_possible_cpu(cpu)
+		x += per_cpu(pn->lruvec_stat_local->count[idx], cpu);
+#ifdef CONFIG_SMP
+	if (x < 0)
 		x = 0;
-	}
-	__this_cpu_write(pn->lruvec_stat_cpu->count[idx], x);
+#endif
+	return x;
 }
+
+void __mod_lruvec_state(struct lruvec *lruvec, enum node_stat_item idx,
+			int val);
 
 static inline void mod_lruvec_state(struct lruvec *lruvec,
 				    enum node_stat_item idx, int val)
@@ -818,22 +822,8 @@ unsigned long mem_cgroup_soft_limit_reclaim(pg_data_t *pgdat, int order,
 						gfp_t gfp_mask,
 						unsigned long *total_scanned);
 
-static inline void __count_memcg_events(struct mem_cgroup *memcg,
-					enum vm_event_item idx,
-					unsigned long count)
-{
-	unsigned long x;
-
-	if (mem_cgroup_disabled())
-		return;
-
-	x = count + __this_cpu_read(memcg->stat_cpu->events[idx]);
-	if (unlikely(x > MEMCG_CHARGE_BATCH)) {
-		atomic_long_add(x, &memcg->events[idx]);
-		x = 0;
-	}
-	__this_cpu_write(memcg->stat_cpu->events[idx], x);
-}
+void __count_memcg_events(struct mem_cgroup *memcg, enum vm_event_item idx,
+			  unsigned long count);
 
 static inline void count_memcg_events(struct mem_cgroup *memcg,
 				      enum vm_event_item idx,
@@ -1160,6 +1150,12 @@ static inline unsigned long memcg_page_state(struct mem_cgroup *memcg,
 	return 0;
 }
 
+static inline unsigned long memcg_page_state_local(struct mem_cgroup *memcg,
+						   int idx)
+{
+	return 0;
+}
+
 static inline void __mod_memcg_state(struct mem_cgroup *memcg,
 				     int idx,
 				     int nr)
@@ -1186,6 +1182,12 @@ static inline void mod_memcg_page_state(struct page *page,
 
 static inline unsigned long lruvec_page_state(struct lruvec *lruvec,
 					      enum node_stat_item idx)
+{
+	return node_page_state(lruvec_pgdat(lruvec), idx);
+}
+
+static inline unsigned long lruvec_page_state_local(struct lruvec *lruvec,
+						    enum node_stat_item idx)
 {
 	return node_page_state(lruvec_pgdat(lruvec), idx);
 }

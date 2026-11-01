@@ -689,10 +689,95 @@ mem_cgroup_largest_soft_limit_node(struct mem_cgroup_tree_per_node *mctz)
 	return mz;
 }
 
-static unsigned long memcg_sum_events(struct mem_cgroup *memcg,
-				      int event)
+static unsigned long memcg_events_local(struct mem_cgroup *memcg,
+					int event)
+{
+	unsigned long x = 0;
+	int cpu;
+
+	for_each_possible_cpu(cpu)
+		x += per_cpu(memcg->stat_cpu_local->events[event], cpu);
+	return x;
+}
+
+static unsigned long memcg_events(struct mem_cgroup *memcg, int event)
 {
 	return atomic_long_read(&memcg->events[event]);
+}
+
+void __mod_memcg_state(struct mem_cgroup *memcg, int idx, int val)
+{
+	long x;
+	struct mem_cgroup *mi;
+
+	if (mem_cgroup_disabled())
+		return;
+
+	__this_cpu_add(memcg->stat_cpu_local->count[idx], val);
+
+	x = val + __this_cpu_read(memcg->stat_cpu->count[idx]);
+	if (unlikely(abs(x) > MEMCG_CHARGE_BATCH)) {
+		for (mi = memcg; mi; mi = parent_mem_cgroup(mi))
+			atomic_long_add(x, &mi->stat[idx]);
+		x = 0;
+	}
+	__this_cpu_write(memcg->stat_cpu->count[idx], x);
+}
+
+static struct mem_cgroup_per_node *
+parent_nodeinfo(struct mem_cgroup_per_node *pn, int nid)
+{
+	struct mem_cgroup *parent = parent_mem_cgroup(pn->memcg);
+
+	if (!parent)
+		return NULL;
+	return mem_cgroup_nodeinfo(parent, nid);
+}
+
+void __mod_lruvec_state(struct lruvec *lruvec, enum node_stat_item idx,
+			int val)
+{
+	pg_data_t *pgdat = lruvec_pgdat(lruvec);
+	struct mem_cgroup_per_node *pn;
+	struct mem_cgroup_per_node *pi;
+	long x;
+
+	__mod_node_page_state(pgdat, idx, val);
+
+	if (mem_cgroup_disabled())
+		return;
+
+	__mod_memcg_state(lruvec_memcg(lruvec), idx, val);
+	pn = container_of(lruvec, struct mem_cgroup_per_node, lruvec);
+	__this_cpu_add(pn->lruvec_stat_local->count[idx], val);
+
+	x = val + __this_cpu_read(pn->lruvec_stat_cpu->count[idx]);
+	if (unlikely(abs(x) > MEMCG_CHARGE_BATCH)) {
+		for (pi = pn; pi; pi = parent_nodeinfo(pi, pgdat->node_id))
+			atomic_long_add(x, &pi->lruvec_stat[idx]);
+		x = 0;
+	}
+	__this_cpu_write(pn->lruvec_stat_cpu->count[idx], x);
+}
+
+void __count_memcg_events(struct mem_cgroup *memcg, enum vm_event_item idx,
+			  unsigned long count)
+{
+	unsigned long x;
+	struct mem_cgroup *mi;
+
+	if (mem_cgroup_disabled())
+		return;
+
+	__this_cpu_add(memcg->stat_cpu_local->events[idx], count);
+
+	x = count + __this_cpu_read(memcg->stat_cpu->events[idx]);
+	if (unlikely(x > MEMCG_CHARGE_BATCH)) {
+		for (mi = memcg; mi; mi = parent_mem_cgroup(mi))
+			atomic_long_add(x, &mi->events[idx]);
+		x = 0;
+	}
+	__this_cpu_write(memcg->stat_cpu->events[idx], x);
 }
 
 static void mem_cgroup_charge_statistics(struct mem_cgroup *memcg,
@@ -1367,7 +1452,7 @@ void mem_cgroup_print_oom_info(struct mem_cgroup *memcg, struct task_struct *p)
 			if (memcg1_stats[i] == MEMCG_SWAP && !do_swap_account)
 				continue;
 			pr_cont(" %s:%luKB", memcg1_stat_names[i],
-				K(memcg_page_state(iter, memcg1_stats[i])));
+				K(memcg_page_state_local(iter, memcg1_stats[i])));
 		}
 
 		for (i = 0; i < NR_LRU_LISTS; i++)
@@ -2126,6 +2211,7 @@ static int memcg_hotplug_cpu_dead(unsigned int cpu)
 
 	for_each_mem_cgroup(memcg) {
 		struct mem_cgroup_stat_cpu *stat_cpu;
+		struct mem_cgroup *mi;
 		int i;
 
 		stat_cpu = per_cpu_ptr(memcg->stat_cpu, cpu);
@@ -2137,7 +2223,8 @@ static int memcg_hotplug_cpu_dead(unsigned int cpu)
 			x = stat_cpu->count[i];
 			if (x) {
 				stat_cpu->count[i] = 0;
-				atomic_long_add(x, &memcg->stat[i]);
+				for (mi = memcg; mi; mi = parent_mem_cgroup(mi))
+					atomic_long_add(x, &mi->stat[i]);
 			}
 
 			if (i >= NR_VM_NODE_STAT_ITEMS)
@@ -2145,6 +2232,7 @@ static int memcg_hotplug_cpu_dead(unsigned int cpu)
 
 			for_each_node(nid) {
 				struct mem_cgroup_per_node *pn;
+				struct mem_cgroup_per_node *pi;
 				struct lruvec_stat *lstat_cpu;
 
 				pn = mem_cgroup_nodeinfo(memcg, nid);
@@ -2153,7 +2241,10 @@ static int memcg_hotplug_cpu_dead(unsigned int cpu)
 				x = lstat_cpu->count[i];
 				if (x) {
 					lstat_cpu->count[i] = 0;
-					atomic_long_add(x, &pn->lruvec_stat[i]);
+					for (pi = pn; pi;
+					     pi = parent_nodeinfo(pi, nid))
+						atomic_long_add(x,
+								&pi->lruvec_stat[i]);
 				}
 			}
 		}
@@ -2164,7 +2255,8 @@ static int memcg_hotplug_cpu_dead(unsigned int cpu)
 			x = stat_cpu->events[i];
 			if (x) {
 				stat_cpu->events[i] = 0;
-				atomic_long_add(x, &memcg->events[i]);
+				for (mi = memcg; mi; mi = parent_mem_cgroup(mi))
+					atomic_long_add(x, &mi->events[i]);
 			}
 		}
 	}
@@ -3048,40 +3140,35 @@ struct accumulated_stats {
 	int events_size;
 };
 
-static void accumulate_memcg_tree(struct mem_cgroup *memcg,
-				  struct accumulated_stats *acc)
+/* Recursive queries follow accounting parents, not CSS-only v1 children. */
+static void memcg_accumulate_stats(struct mem_cgroup *memcg,
+				   struct accumulated_stats *acc)
 {
-	struct mem_cgroup *mi;
-	int i;
+	int i, idx;
 
-	for_each_mem_cgroup_tree(mi, memcg) {
-		for (i = 0; i < acc->stats_size; i++)
-			acc->stat[i] += memcg_page_state(mi,
-				acc->stats_array ? acc->stats_array[i] : i);
-
-		for (i = 0; i < acc->events_size; i++)
-			acc->events[i] += memcg_sum_events(mi,
-				acc->events_array ? acc->events_array[i] : i);
-
-		for (i = 0; i < NR_LRU_LISTS; i++)
-			acc->lru_pages[i] +=
-				mem_cgroup_nr_lru_pages(mi, BIT(i));
+	for (i = 0; i < acc->stats_size; i++) {
+		idx = acc->stats_array ? acc->stats_array[i] : i;
+		acc->stat[i] = memcg_page_state(memcg, idx);
 	}
+
+	for (i = 0; i < acc->events_size; i++) {
+		idx = acc->events_array ? acc->events_array[i] : i;
+		acc->events[i] = memcg_events(memcg, idx);
+	}
+
+	for (i = 0; i < NR_LRU_LISTS; i++)
+		acc->lru_pages[i] = memcg_page_state(memcg, NR_LRU_BASE + i);
 }
 
 static unsigned long mem_cgroup_usage(struct mem_cgroup *memcg, bool swap)
 {
-	unsigned long val = 0;
+	unsigned long val;
 
 	if (mem_cgroup_is_root(memcg)) {
-		struct mem_cgroup *iter;
-
-		for_each_mem_cgroup_tree(iter, memcg) {
-			val += memcg_page_state(iter, MEMCG_CACHE);
-			val += memcg_page_state(iter, MEMCG_RSS);
-			if (swap)
-				val += memcg_page_state(iter, MEMCG_SWAP);
-		}
+		val = memcg_page_state(memcg, MEMCG_CACHE) +
+			memcg_page_state(memcg, MEMCG_RSS);
+		if (swap)
+			val += memcg_page_state(memcg, MEMCG_SWAP);
 	} else {
 		if (!swap)
 			val = page_counter_read(&memcg->memory);
@@ -3484,13 +3571,13 @@ static int memcg_stat_show(struct seq_file *m, void *v)
 		if (memcg1_stats[i] == MEMCG_SWAP && !do_memsw_account())
 			continue;
 		seq_printf(m, "%s %lu\n", memcg1_stat_names[i],
-			   memcg_page_state(memcg, memcg1_stats[i]) *
+			   memcg_page_state_local(memcg, memcg1_stats[i]) *
 			   PAGE_SIZE);
 	}
 
 	for (i = 0; i < ARRAY_SIZE(memcg1_events); i++)
 		seq_printf(m, "%s %lu\n", memcg1_event_names[i],
-			   memcg_sum_events(memcg, memcg1_events[i]));
+			   memcg_events_local(memcg, memcg1_events[i]));
 
 	for (i = 0; i < NR_LRU_LISTS; i++)
 		seq_printf(m, "%s %lu\n", mem_cgroup_lru_names[i],
@@ -3513,7 +3600,7 @@ static int memcg_stat_show(struct seq_file *m, void *v)
 	acc.stats_array = memcg1_stats;
 	acc.events_size = ARRAY_SIZE(memcg1_events);
 	acc.events_array = memcg1_events;
-	accumulate_memcg_tree(memcg, &acc);
+	memcg_accumulate_stats(memcg, &acc);
 
 	for (i = 0; i < ARRAY_SIZE(memcg1_stats); i++) {
 		if (memcg1_stats[i] == MEMCG_SWAP && !do_memsw_account())
@@ -3968,14 +4055,7 @@ struct wb_domain *mem_cgroup_wb_domain(struct bdi_writeback *wb)
  */
 static unsigned long memcg_exact_page_state(struct mem_cgroup *memcg, int idx)
 {
-	long x = atomic_long_read(&memcg->stat[idx]);
-	int cpu;
-
-	for_each_online_cpu(cpu)
-		x += per_cpu_ptr(memcg->stat_cpu, cpu)->count[idx];
-	if (x < 0)
-		x = 0;
-	return x;
+	return memcg_page_state_local(memcg, idx);
 }
 
 /**
@@ -4496,8 +4576,15 @@ static int alloc_mem_cgroup_per_node_info(struct mem_cgroup *memcg, int node)
 	if (!pn)
 		return 1;
 
+	pn->lruvec_stat_local = alloc_percpu(struct lruvec_stat);
+	if (!pn->lruvec_stat_local) {
+		kfree(pn);
+		return 1;
+	}
+
 	pn->lruvec_stat_cpu = alloc_percpu(struct lruvec_stat);
 	if (!pn->lruvec_stat_cpu) {
+		free_percpu(pn->lruvec_stat_local);
 		kfree(pn);
 		return 1;
 	}
@@ -4518,8 +4605,73 @@ static void free_mem_cgroup_per_node_info(struct mem_cgroup *memcg, int node)
 	if (!pn)
 		return;
 
+	free_percpu(pn->lruvec_stat_local);
 	free_percpu(pn->lruvec_stat_cpu);
 	kfree(pn);
+}
+
+static void memcg_flush_percpu_vmstats(struct mem_cgroup *memcg)
+{
+	long stat[MEMCG_NR_STAT] = { 0 };
+	struct mem_cgroup *mi;
+	int cpu, i, node;
+
+	for_each_online_cpu(cpu) {
+		struct mem_cgroup_stat_cpu *stat_cpu;
+
+		stat_cpu = per_cpu_ptr(memcg->stat_cpu, cpu);
+		for (i = 0; i < MEMCG_NR_STAT; i++)
+			stat[i] += stat_cpu->count[i];
+	}
+
+	for (mi = memcg; mi; mi = parent_mem_cgroup(mi))
+		for (i = 0; i < MEMCG_NR_STAT; i++)
+			if (stat[i])
+				atomic_long_add(stat[i], &mi->stat[i]);
+
+	for_each_node(node) {
+		long lruvec_stat[NR_VM_NODE_STAT_ITEMS] = { 0 };
+		struct mem_cgroup_per_node *pn;
+		struct mem_cgroup_per_node *pi;
+
+		pn = mem_cgroup_nodeinfo(memcg, node);
+		if (!pn)
+			continue;
+
+		for_each_online_cpu(cpu) {
+			struct lruvec_stat *stat_cpu;
+
+			stat_cpu = per_cpu_ptr(pn->lruvec_stat_cpu, cpu);
+			for (i = 0; i < NR_VM_NODE_STAT_ITEMS; i++)
+				lruvec_stat[i] += stat_cpu->count[i];
+		}
+
+		for (pi = pn; pi; pi = parent_nodeinfo(pi, node))
+			for (i = 0; i < NR_VM_NODE_STAT_ITEMS; i++)
+				if (lruvec_stat[i])
+					atomic_long_add(lruvec_stat[i],
+							&pi->lruvec_stat[i]);
+	}
+}
+
+static void memcg_flush_percpu_vmevents(struct mem_cgroup *memcg)
+{
+	unsigned long events[NR_VM_EVENT_ITEMS] = { 0 };
+	struct mem_cgroup *mi;
+	int cpu, i;
+
+	for_each_online_cpu(cpu) {
+		struct mem_cgroup_stat_cpu *stat_cpu;
+
+		stat_cpu = per_cpu_ptr(memcg->stat_cpu, cpu);
+		for (i = 0; i < NR_VM_EVENT_ITEMS; i++)
+			events[i] += stat_cpu->events[i];
+	}
+
+	for (mi = memcg; mi; mi = parent_mem_cgroup(mi))
+		for (i = 0; i < NR_VM_EVENT_ITEMS; i++)
+			if (events[i])
+				atomic_long_add(events[i], &mi->events[i]);
 }
 
 static void __mem_cgroup_free(struct mem_cgroup *memcg)
@@ -4528,6 +4680,7 @@ static void __mem_cgroup_free(struct mem_cgroup *memcg)
 
 	for_each_node(node)
 		free_mem_cgroup_per_node_info(memcg, node);
+	free_percpu(memcg->stat_cpu_local);
 	free_percpu(memcg->stat_cpu);
 	kfree(memcg);
 }
@@ -4535,6 +4688,8 @@ static void __mem_cgroup_free(struct mem_cgroup *memcg)
 static void mem_cgroup_free(struct mem_cgroup *memcg)
 {
 	memcg_wb_domain_exit(memcg);
+	memcg_flush_percpu_vmstats(memcg);
+	memcg_flush_percpu_vmevents(memcg);
 	__mem_cgroup_free(memcg);
 }
 
@@ -4555,6 +4710,11 @@ static struct mem_cgroup *mem_cgroup_alloc(void)
 				 1, MEM_CGROUP_ID_MAX,
 				 GFP_KERNEL);
 	if (memcg->id.id < 0)
+		goto fail;
+
+	memcg->stat_cpu_local =
+		alloc_percpu(struct mem_cgroup_stat_cpu_local);
+	if (!memcg->stat_cpu_local)
 		goto fail;
 
 	memcg->stat_cpu = alloc_percpu(struct mem_cgroup_stat_cpu);
@@ -5692,7 +5852,7 @@ static int memory_stat_show(struct seq_file *m, void *v)
 	memset(&acc, 0, sizeof(acc));
 	acc.stats_size = MEMCG_NR_STAT;
 	acc.events_size = NR_VM_EVENT_ITEMS;
-	accumulate_memcg_tree(memcg, &acc);
+	memcg_accumulate_stats(memcg, &acc);
 
 	seq_printf(m, "anon %llu\n",
 		   (u64)acc.stat[MEMCG_RSS] * PAGE_SIZE);
