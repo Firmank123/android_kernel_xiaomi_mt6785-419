@@ -450,6 +450,7 @@ int mem_cgroup_try_charge_delay(struct page *page, struct mm_struct *mm,
 			  bool compound);
 void mem_cgroup_commit_charge(struct page *page, struct mem_cgroup *memcg,
 			      bool lrucare, bool compound);
+void mem_cgroup_swapin_reclassify(struct page *page);
 void mem_cgroup_cancel_charge(struct page *page, struct mem_cgroup *memcg,
 		bool compound);
 void mem_cgroup_uncharge(struct page *page);
@@ -970,6 +971,10 @@ static inline int mem_cgroup_try_charge_delay(struct page *page,
 static inline void mem_cgroup_commit_charge(struct page *page,
 					    struct mem_cgroup *memcg,
 					    bool lrucare, bool compound)
+{
+}
+
+static inline void mem_cgroup_swapin_reclassify(struct page *page)
 {
 }
 

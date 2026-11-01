@@ -6214,6 +6214,9 @@ int mem_cgroup_try_charge(struct page *page, struct mm_struct *mm,
 		goto out;
 
 	if (PageSwapCache(page)) {
+		swp_entry_t ent = { .val = page_private(page), };
+		unsigned short id;
+
 		/*
 		 * Every swap fault against a single page tries to charge the
 		 * page, bail as early as possible.  shmem_unuse() encounters
@@ -6225,16 +6228,13 @@ int mem_cgroup_try_charge(struct page *page, struct mm_struct *mm,
 		if (page_memcg(compound_head(page)))
 			goto out;
 
-		if (do_swap_account) {
-			swp_entry_t ent = { .val = page_private(page), };
-			unsigned short id = lookup_swap_cgroup_id(ent);
-
-			rcu_read_lock();
-			memcg = mem_cgroup_from_id(id);
-			if (memcg && !css_tryget_online(&memcg->css))
-				memcg = NULL;
-			rcu_read_unlock();
-		}
+		/* Swap ownership is tracked even when swap accounting is off. */
+		id = lookup_swap_cgroup_id(ent);
+		rcu_read_lock();
+		memcg = mem_cgroup_from_id(id);
+		if (memcg && !css_tryget_online(&memcg->css))
+			memcg = NULL;
+		rcu_read_unlock();
 	}
 
 	if (!memcg)
@@ -6269,7 +6269,8 @@ int mem_cgroup_try_charge_delay(struct page *page, struct mm_struct *mm,
  * @compound: charge the page as compound or small page
  *
  * Finalize a charge transaction started by mem_cgroup_try_charge(),
- * after page->mapping has been set up.  This must happen atomically
+ * after page-cache mapping or swap-cache insertion has been set up. This
+ * must happen atomically
  * as part of the page instantiation, i.e. under the page table lock
  * for anonymous pages, under the page lock for page and swap cache.
  *
@@ -6283,7 +6284,8 @@ void mem_cgroup_commit_charge(struct page *page, struct mem_cgroup *memcg,
 {
 	unsigned int nr_pages = compound ? hpage_nr_pages(page) : 1;
 
-	VM_BUG_ON_PAGE(!page->mapping, page);
+	/* A newly instantiated swapcache page has no mapping yet. */
+	VM_BUG_ON_PAGE(!page->mapping && !PageSwapCache(page), page);
 	VM_BUG_ON_PAGE(PageLRU(page) && !lrucare, page);
 
 	if (mem_cgroup_disabled())
@@ -6303,15 +6305,38 @@ void mem_cgroup_commit_charge(struct page *page, struct mem_cgroup *memcg,
 	memcg_check_events(memcg, page);
 	local_irq_enable();
 
-	if (do_memsw_account() && PageSwapCache(page)) {
+	/* cgroup1 transfers swap ownership to the charged page. cgroup2 keeps
+	 * swap ownership until the slot is freed because memory and swap are
+	 * accounted independently.
+	 */
+	if (!cgroup_subsys_on_dfl(memory_cgrp_subsys) && PageSwapCache(page)) {
 		swp_entry_t entry = { .val = page_private(page) };
-		/*
-		 * The swap entry might not get freed for a long time,
-		 * let's not wait for it.  The page already received a
-		 * memory+swap charge, drop the swap entry duplicate.
-		 */
+		/* The resident page owns cgroup1's swap charge and owner record. */
 		mem_cgroup_uncharge_swap(entry, nr_pages);
 	}
+}
+
+/*
+ * Swapcache pages are charged before anonymous rmap is installed. Until the
+ * first fault maps one, PageAnon() is false and charge_statistics() accounts
+ * it as cache/shmem. Move those private statistics when rmap establishes the
+ * anonymous mapping; the page-counter charge and page-in event are unchanged.
+ */
+void mem_cgroup_swapin_reclassify(struct page *page)
+{
+	struct mem_cgroup *memcg = page_memcg(page);
+	unsigned long flags;
+	int nr_pages;
+
+	if (!memcg || !PageAnon(page))
+		return;
+
+	nr_pages = hpage_nr_pages(page);
+	local_irq_save(flags);
+	__mod_memcg_state(memcg, MEMCG_CACHE, -nr_pages);
+	__mod_memcg_state(memcg, NR_SHMEM, -nr_pages);
+	__mod_memcg_state(memcg, MEMCG_RSS, nr_pages);
+	local_irq_restore(flags);
 }
 
 /**
@@ -6719,11 +6744,12 @@ static struct mem_cgroup *mem_cgroup_id_get_online(struct mem_cgroup *memcg)
 }
 
 /**
- * mem_cgroup_swapout - transfer a memsw charge to swap
- * @page: page whose memsw charge to transfer
+ * mem_cgroup_swapout - transfer page ownership and accounting to swap
+ * @page: page whose ownership and accounting to transfer
  * @entry: swap entry to move the charge to
  *
- * Transfer the memsw charge of @page to @entry.
+ * Transfer the cgroup1 memsw charge of @page to @entry, and retain its
+ * owner record even when swap resource accounting is disabled.
  */
 void mem_cgroup_swapout(struct page *page, swp_entry_t entry)
 {
@@ -6734,7 +6760,9 @@ void mem_cgroup_swapout(struct page *page, swp_entry_t entry)
 	VM_BUG_ON_PAGE(PageLRU(page), page);
 	VM_BUG_ON_PAGE(page_count(page), page);
 
-	if (!do_memsw_account())
+	/* cgroup2 records swap ownership when the slot is allocated. */
+	if (mem_cgroup_disabled() ||
+	    cgroup_subsys_on_dfl(memory_cgrp_subsys))
 		return;
 
 	memcg = page_memcg(page);
@@ -6756,14 +6784,15 @@ void mem_cgroup_swapout(struct page *page, swp_entry_t entry)
 	oldid = swap_cgroup_record(entry, mem_cgroup_id(swap_memcg),
 				   nr_entries);
 	VM_BUG_ON_PAGE(oldid, page);
-	mod_memcg_state(swap_memcg, MEMCG_SWAP, nr_entries);
+	if (do_swap_account)
+		mod_memcg_state(swap_memcg, MEMCG_SWAP, nr_entries);
 
 	page->memcg_data = 0;
 
 	if (!mem_cgroup_is_root(memcg))
 		page_counter_uncharge(&memcg->memory, nr_entries);
 
-	if (memcg != swap_memcg) {
+	if (do_memsw_account() && memcg != swap_memcg) {
 		if (!mem_cgroup_is_root(swap_memcg))
 			page_counter_charge(&swap_memcg->memsw, nr_entries);
 		page_counter_uncharge(&memcg->memsw, nr_entries);
@@ -6800,7 +6829,8 @@ int mem_cgroup_try_charge_swap(struct page *page, swp_entry_t entry)
 	struct mem_cgroup *memcg;
 	unsigned short oldid;
 
-	if (!cgroup_subsys_on_dfl(memory_cgrp_subsys) || !do_swap_account)
+	if (mem_cgroup_disabled() ||
+	    !cgroup_subsys_on_dfl(memory_cgrp_subsys))
 		return 0;
 
 	memcg = page_memcg(page);
@@ -6810,13 +6840,14 @@ int mem_cgroup_try_charge_swap(struct page *page, swp_entry_t entry)
 		return 0;
 
 	if (!entry.val) {
-		memcg_memory_event(memcg, MEMCG_SWAP_FAIL);
+		if (do_swap_account)
+			memcg_memory_event(memcg, MEMCG_SWAP_FAIL);
 		return 0;
 	}
 
 	memcg = mem_cgroup_id_get_online(memcg);
 
-	if (!mem_cgroup_is_root(memcg) &&
+	if (do_swap_account && !mem_cgroup_is_root(memcg) &&
 	    !page_counter_try_charge(&memcg->swap, nr_pages, &counter)) {
 		memcg_memory_event(memcg, MEMCG_SWAP_MAX);
 		memcg_memory_event(memcg, MEMCG_SWAP_FAIL);
@@ -6829,13 +6860,14 @@ int mem_cgroup_try_charge_swap(struct page *page, swp_entry_t entry)
 		mem_cgroup_id_get_many(memcg, nr_pages - 1);
 	oldid = swap_cgroup_record(entry, mem_cgroup_id(memcg), nr_pages);
 	VM_BUG_ON_PAGE(oldid, page);
-	mod_memcg_state(memcg, MEMCG_SWAP, nr_pages);
+	if (do_swap_account)
+		mod_memcg_state(memcg, MEMCG_SWAP, nr_pages);
 
 	return 0;
 }
 
 /**
- * mem_cgroup_uncharge_swap - uncharge swap space
+ * mem_cgroup_uncharge_swap - uncharge swap space and release its owner record
  * @entry: swap entry to uncharge
  * @nr_pages: the amount of swap space to uncharge
  */
@@ -6844,20 +6876,24 @@ void mem_cgroup_uncharge_swap(swp_entry_t entry, unsigned int nr_pages)
 	struct mem_cgroup *memcg;
 	unsigned short id;
 
-	if (!do_swap_account)
+	if (mem_cgroup_disabled())
 		return;
 
 	id = swap_cgroup_record(entry, 0, nr_pages);
 	rcu_read_lock();
 	memcg = mem_cgroup_from_id(id);
 	if (memcg) {
-		if (!mem_cgroup_is_root(memcg)) {
-			if (cgroup_subsys_on_dfl(memory_cgrp_subsys))
-				page_counter_uncharge(&memcg->swap, nr_pages);
-			else
-				page_counter_uncharge(&memcg->memsw, nr_pages);
+		if (do_swap_account) {
+			if (!mem_cgroup_is_root(memcg)) {
+				if (cgroup_subsys_on_dfl(memory_cgrp_subsys))
+					page_counter_uncharge(&memcg->swap,
+							      nr_pages);
+				else
+					page_counter_uncharge(&memcg->memsw,
+							      nr_pages);
+			}
+			mod_memcg_state(memcg, MEMCG_SWAP, -nr_pages);
 		}
-		mod_memcg_state(memcg, MEMCG_SWAP, -nr_pages);
 		mem_cgroup_id_put_many(memcg, nr_pages);
 	}
 	rcu_read_unlock();

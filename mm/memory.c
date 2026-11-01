@@ -2867,6 +2867,8 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 	pte_t pte;
 	int locked;
 	int exclusive = 0;
+	bool reclassify_swapin = false;
+	struct page *sync_page = NULL;
 	vm_fault_t ret = 0;
 
 	if (!pte_unmap_same(vma->vm_mm, vmf->pmd, vmf->pte, vmf->orig_pte))
@@ -2911,7 +2913,7 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 				__SetPageLocked(page);
 				__SetPageSwapBacked(page);
 				set_page_private(page, entry.val);
-				lru_cache_add_anon(page);
+				sync_page = page;
 				swap_readpage(page, true);
 			}
 		} else {
@@ -2965,18 +2967,26 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 			page_private(page) != entry.val)) && swapcache)
 		goto out_page;
 
+	reclassify_swapin = PageSwapCache(page) && !PageAnon(page);
+
 	page = ksm_might_need_to_copy(page, vma, vmf->address);
 	if (unlikely(!page)) {
 		ret = VM_FAULT_OOM;
-		page = swapcache;
+		page = swapcache ? swapcache : sync_page;
 		goto out_page;
 	}
 
+	if (page == sync_page)
+		SetPageSwapCache(page);
 	if (mem_cgroup_try_charge_delay(page, vma->vm_mm, GFP_KERNEL,
 					&memcg, false)) {
+		if (page == sync_page)
+			ClearPageSwapCache(page);
 		ret = VM_FAULT_OOM;
 		goto out_page;
 	}
+	if (page == sync_page)
+		ClearPageSwapCache(page);
 
 	/*
 	 * Back out if somebody else already faulted in this pte.
@@ -3018,14 +3028,23 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 	vmf->orig_pte = pte;
 
 	/* ksm created a completely new copy */
-	if (unlikely(page != swapcache && swapcache)) {
+	if (unlikely(page != swapcache && (swapcache || sync_page))) {
 		page_add_new_anon_rmap(page, vma, vmf->address, false);
 		mem_cgroup_commit_charge(page, memcg, false, false);
 		lru_cache_add_active_or_unevictable(page, vma);
 	} else {
 		do_page_add_anon_rmap(page, vma, vmf->address, exclusive);
+		if (reclassify_swapin)
+			mem_cgroup_swapin_reclassify(page);
+		if (page == sync_page)
+			SetPageSwapCache(page);
 		mem_cgroup_commit_charge(page, memcg, true, false);
-		activate_page(page);
+		if (page == sync_page)
+			ClearPageSwapCache(page);
+		if (swapcache)
+			activate_page(page);
+		else
+			lru_cache_add_active_or_unevictable(page, vma);
 	}
 
 	swap_free(entry);
@@ -3044,6 +3063,10 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 		 */
 		unlock_page(swapcache);
 		put_page(swapcache);
+	}
+	if (sync_page && page != sync_page) {
+		unlock_page(sync_page);
+		put_page(sync_page);
 	}
 
 	if (vmf->flags & FAULT_FLAG_WRITE) {
@@ -3064,6 +3087,10 @@ out_nomap:
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
 out_page:
 	unlock_page(page);
+	if (sync_page && page != sync_page) {
+		unlock_page(sync_page);
+		put_page(sync_page);
+	}
 out_release:
 	put_page(page);
 	if (page != swapcache && swapcache) {

@@ -1773,9 +1773,11 @@ static int unuse_pte(struct vm_area_struct *vma, pmd_t *pmd,
 	struct mem_cgroup *memcg;
 	spinlock_t *ptl;
 	pte_t *pte;
+	bool reclassify_swapin;
 	int ret = 1;
 
 	swapcache = page;
+	reclassify_swapin = PageSwapCache(page) && !PageAnon(page);
 	page = ksm_might_need_to_copy(page, vma, addr);
 	if (unlikely(!page))
 		return -ENOMEM;
@@ -1800,6 +1802,8 @@ static int unuse_pte(struct vm_area_struct *vma, pmd_t *pmd,
 		   pte_mkold(mk_pte(page, vma->vm_page_prot)));
 	if (page == swapcache) {
 		page_add_anon_rmap(page, vma, addr, false);
+		if (reclassify_swapin)
+			mem_cgroup_swapin_reclassify(page);
 		mem_cgroup_commit_charge(page, memcg, true, false);
 	} else { /* ksm created a completely new copy */
 		page_add_new_anon_rmap(page, vma, addr, false);
