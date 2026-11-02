@@ -3721,7 +3721,7 @@ static inline unsigned long _task_util_est(struct task_struct *p)
 {
 	struct util_est ue = READ_ONCE(p->se.avg.util_est);
 
-	return max(ue.ewma, ue.enqueued);
+	return max(ue.ewma, (ue.enqueued & ~UTIL_AVG_UNCHANGED));
 }
 
 unsigned long task_util_est(struct task_struct *p)
@@ -3753,7 +3753,7 @@ static inline void util_est_enqueue(struct cfs_rq *cfs_rq,
 
 	/* Update root cfs_rq's estimated utilization */
 	enqueued  = cfs_rq->avg.util_est.enqueued;
-	enqueued += (_task_util_est(p) | UTIL_AVG_UNCHANGED);
+	enqueued += _task_util_est(p);
 	WRITE_ONCE(cfs_rq->avg.util_est.enqueued, enqueued);
 
 	/* Update plots for Task and CPU estimated utilization */
@@ -3771,8 +3771,7 @@ util_est_dequeue(struct cfs_rq *cfs_rq, struct task_struct *p)
 
 	/* Update root cfs_rq's estimated utilization */
 	enqueued  = cfs_rq->avg.util_est.enqueued;
-	enqueued -= min_t(unsigned int, enqueued,
-			  (_task_util_est(p) | UTIL_AVG_UNCHANGED));
+	enqueued -= min_t(unsigned int, enqueued, _task_util_est(p));
 	WRITE_ONCE(cfs_rq->avg.util_est.enqueued, enqueued);
 
 	/* Update plots for CPU's estimated utilization */
@@ -3825,7 +3824,7 @@ util_est_update(struct cfs_rq *cfs_rq, struct task_struct *p,
 	 * Reset EWMA on utilization increases, the moving average is used only
 	 * to smooth utilization decreases.
 	 */
-	ue.enqueued = (task_util(p) | UTIL_AVG_UNCHANGED);
+	ue.enqueued = task_util(p);
 	if (sched_feat(UTIL_EST_FASTUP)) {
 		if (ue.ewma < ue.enqueued) {
 			ue.ewma = ue.enqueued;
@@ -3874,6 +3873,7 @@ util_est_update(struct cfs_rq *cfs_rq, struct task_struct *p,
 	ue.ewma  += last_ewma_diff;
 	ue.ewma >>= UTIL_EST_WEIGHT_SHIFT;
 done:
+	ue.enqueued |= UTIL_AVG_UNCHANGED;
 	WRITE_ONCE(p->se.avg.util_est, ue);
 
 	/* Update plots for Task's estimated utilization */
@@ -6913,7 +6913,7 @@ static unsigned long cpu_util_without(int cpu, struct task_struct *p)
 		 */
 		if (unlikely(task_on_rq_queued(p) || current == p)) {
 			estimated -= min_t(unsigned int, estimated,
-					   (_task_util_est(p) | UTIL_AVG_UNCHANGED));
+					   _task_util_est(p));
 		}
 		util = max(util, estimated);
 	}
@@ -7611,7 +7611,7 @@ static int find_energy_efficient_cpu(struct task_struct *p, int prev_cpu, int sy
 		goto fail;
 
 	sync_entity_load_avg(&p->se);
-	if (!task_util_est(p))
+	if (!uclamp_task_util(p))
 		goto unlock;
 
 	/* Pre-select a set of candidate CPUs. */
