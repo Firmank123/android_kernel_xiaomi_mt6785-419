@@ -2838,6 +2838,12 @@ account_entity_dequeue(struct cfs_rq *cfs_rq, struct sched_entity *se)
 	WRITE_ONCE(*ptr, res);					\
 } while (0)
 
+#define lsub_positive(_ptr, _val) do {				\
+	typeof(_ptr) ptr = (_ptr);				\
+	*ptr -= min_t(typeof(*ptr), *ptr, _val);		\
+} while (0)
+
+
 #ifdef CONFIG_SMP
 static inline void
 enqueue_runnable_load_avg(struct cfs_rq *cfs_rq, struct sched_entity *se)
@@ -7448,7 +7454,8 @@ static void select_cpu_candidates(struct sched_domain *sd, cpumask_t *cpus,
 
 			util = cpu_util_next(cpu, p, cpu);
 			cpu_cap = capacity_of(cpu);
-			spare_cap = cpu_cap - util;
+			spare_cap = cpu_cap;
+			lsub_positive(&spare_cap, util);
 
 			/*
 			 * Skip CPUs that cannot satisfy the capacity request.
