@@ -13,8 +13,13 @@ void mt_ppm_set_dvfs_table(unsigned int cpu,
 {
 }
 
-void mt_ppm_register_client(enum ppm_client client,
+int mt_ppm_register_client(enum ppm_client client,
 	void (*limit)(struct ppm_client_req req))
+{
+	return 0;
+}
+
+void mt_ppm_unregister_client(enum ppm_client client)
 {
 }
 

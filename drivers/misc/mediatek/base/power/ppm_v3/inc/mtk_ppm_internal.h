@@ -309,7 +309,8 @@ extern void aee_rr_rec_ppm_policy_mask(u32 val);
 extern void aee_rr_rec_ppm_waiting_for_pbm(u8 val);
 #endif
 
-extern void ppm_init_qos_request(void);
+extern int ppm_init_qos_request(void);
+extern void ppm_deinit_qos_request(void);
 
 #define trace_ppm_update(a, b, c, d) do { } while (0)
 static inline int arch_get_cluster_cpus(struct cpumask *cpus, int cluster_id)

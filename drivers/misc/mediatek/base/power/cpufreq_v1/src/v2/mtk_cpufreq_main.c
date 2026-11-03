@@ -1675,7 +1675,10 @@ static int _mt_cpufreq_pdrv_probe(struct platform_device *pdev)
 			p->freq_tbl_for_cpufreq, p->nr_opp_tbl, lv);
 
 	}
-	mt_ppm_register_client(PPM_CLIENT_DVFS, &ppm_limit_callback);
+	ret = mt_ppm_register_client(PPM_CLIENT_DVFS, &ppm_limit_callback);
+	if (ret)
+		tag_pr_notice("failed to register PPM DVFS client (%d), AP QoS inactive\n",
+			      (int)ret);
 	pm_notifier(_mt_cpufreq_pm_callback, 0);
 
 	FUNC_EXIT(FUNC_LV_MODULE);
@@ -1687,6 +1690,7 @@ static int _mt_cpufreq_pdrv_remove(struct platform_device *pdev)
 {
 	FUNC_ENTER(FUNC_LV_MODULE);
 
+	mt_ppm_unregister_client(PPM_CLIENT_DVFS);
 	cpuhp_remove_state_nocalls(hp_online);
 	cpufreq_unregister_driver(&_mt_cpufreq_driver);
 
