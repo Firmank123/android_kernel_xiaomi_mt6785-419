@@ -403,6 +403,8 @@ unlock_and_return:
 /******************************************************************************
  * Module related
  *****************************************************************************/
+static void ged_pdrv_cleanup(void);
+
 /*
  * ged driver probe
  */
@@ -527,19 +529,27 @@ static int ged_pdrv_probe(struct platform_device *pdev)
 #ifdef CONFIG_MTK_GPU_OPP_STATS_SUPPORT
 	err = ged_dvfs_init_opp_cost();
 	if (err) {
-		GED_LOGE("@%s: failed to probe ged driver (%d)\n", __func__, err);
+		if (err == -EPROBE_DEFER) {
+			GED_LOGE("@%s: gpufreq opp table not ready (%d), deferring probe\n",
+				__func__, err);
+			goto ERROR;
+		}
+		GED_LOGE("@%s: failed to init opp cost stats (%d), stats unavailable\n",
+			__func__, err);
+		err = GED_OK;
 	}
 #endif /* CONFIG_MTK_GPU_OPP_STATS_SUPPORT */
 
 	GED_LOGI("@%s: ged driver probe done\n", __func__);
 
+	return GED_OK;
+
 ERROR:
+	ged_pdrv_cleanup();
 	return err;
 }
-/*
- * unregister the gpufreq driver, remove fs node
- */
-static void ged_exit(void)
+
+static void ged_pdrv_cleanup(void)
 {
 #ifndef GED_BUFFER_LOG_DISABLE
 	ged_log_buf_free(gpufreq_ged_log);
@@ -591,6 +601,14 @@ static void ged_exit(void)
 	ged_sysfs_exit();
 
 	remove_proc_entry(GED_DRIVER_DEVICE_NAME, NULL);
+}
+
+/*
+ * unregister the gpufreq driver, remove fs node
+ */
+static void ged_exit(void)
+{
+	ged_pdrv_cleanup();
 
 	platform_driver_unregister(&g_ged_pdrv);
 }

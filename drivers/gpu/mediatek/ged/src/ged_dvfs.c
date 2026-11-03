@@ -561,7 +561,22 @@ unsigned long ged_dvfs_get_last_commit_idx(void)
 #ifdef CONFIG_MTK_GPU_OPP_STATS_SUPPORT
 void ged_opp_stat_step(void)
 {
-	g_aOppStat[g_ui32PreFreqID].uMem.aTrans[g_ui32CurFreqID]++;
+	struct GED_DVFS_OPP_STAT *opp_stat;
+	int num;
+
+	opp_stat = READ_ONCE(g_aOppStat);
+	num = READ_ONCE(g_num);
+	if (!opp_stat || num <= 0)
+		return;
+
+	if (g_ui32PreFreqID >= (unsigned int)num ||
+	    g_ui32CurFreqID >= (unsigned int)num)
+		return;
+
+	if (!opp_stat[g_ui32PreFreqID].uMem.aTrans)
+		return;
+
+	opp_stat[g_ui32PreFreqID].uMem.aTrans[g_ui32CurFreqID]++;
 }
 #endif /* CONFIG_MTK_GPU_OPP_STATS_SUPPORT */
 
@@ -2149,16 +2164,24 @@ unsigned long ged_gas_query_mode(void)
 #ifdef CONFIG_MTK_GPU_OPP_STATS_SUPPORT
 void ged_dvfs_reset_opp_cost(int oppsize)
 {
+	struct GED_DVFS_OPP_STAT *opp_stat;
+	int num;
 	int i;
 
-	if (g_aOppStat && oppsize > 0 && oppsize <= mt_gpufreq_get_dvfs_table_num()) {
-		for (i = 0; i < oppsize; i++) {
-			if (g_aOppStat[i].uMem.aTrans) {
-				g_aOppStat[i].ui64Active = 0;
-				g_aOppStat[i].ui64Idle = 0;
-				memset(g_aOppStat[i].uMem.aTrans,
-					0, sizeof(uint32_t) * oppsize);
-			}
+	opp_stat = READ_ONCE(g_aOppStat);
+	num = READ_ONCE(g_num);
+	if (!opp_stat || num <= 0)
+		return;
+
+	if (oppsize <= 0 || oppsize > num)
+		oppsize = num;
+
+	for (i = 0; i < oppsize; i++) {
+		if (opp_stat[i].uMem.aTrans) {
+			opp_stat[i].ui64Active = 0;
+			opp_stat[i].ui64Idle = 0;
+			memset(opp_stat[i].uMem.aTrans, 0,
+			       sizeof(uint32_t) * oppsize);
 		}
 	}
 }
@@ -2166,75 +2189,102 @@ void ged_dvfs_reset_opp_cost(int oppsize)
 int ged_dvfs_query_opp_cost(struct GED_DVFS_OPP_STAT *psReport,
 	int i32NumOpp, bool bStript)
 {
+	struct GED_DVFS_OPP_STAT *opp_stat;
+	int num;
 	int i;
 
-	if (g_aOppStat && psReport &&
-		i32NumOpp > 0 &&
-		i32NumOpp <= mt_gpufreq_get_dvfs_table_num()) {
+	opp_stat = READ_ONCE(g_aOppStat);
+	num = READ_ONCE(g_num);
+	if (!opp_stat || num <= 0 || !psReport)
+		return -1;
 
-		memcpy(psReport, g_aOppStat,
-			i32NumOpp * sizeof(struct GED_DVFS_OPP_STAT));
+	if (i32NumOpp <= 0 || i32NumOpp > num)
+		return -1;
 
-		if (bStript) {
-			for (i = 0; i < i32NumOpp; i++) {
-				psReport[i].uMem.ui32Freq
-					= mt_gpufreq_get_freq_by_idx(i);
-	}
+	memcpy(psReport, opp_stat,
+		i32NumOpp * sizeof(struct GED_DVFS_OPP_STAT));
+
+	if (bStript) {
+		for (i = 0; i < i32NumOpp; i++) {
+			psReport[i].uMem.ui32Freq
+				= mt_gpufreq_get_freq_by_idx(i);
 		}
-		return 0;
 	}
-	return -1;
+	return 0;
 }
 
 void ged_dvfs_update_opp_cost(unsigned int loading,
 	unsigned int TSDiff_us, unsigned long long cur_us, unsigned int idx)
 {
+	struct GED_DVFS_OPP_STAT *opp_stat;
+	int num;
 	unsigned int Active_us;
 	(void) cur_us;
 
-	if (g_aOppStat) {
-		Active_us = (TSDiff_us * loading / 100);
-		/* update opp busy */
-		g_aOppStat[idx].ui64Active += Active_us;
-		g_aOppStat[idx].ui64Idle += (TSDiff_us - Active_us);
-	}
+	opp_stat = READ_ONCE(g_aOppStat);
+	num = READ_ONCE(g_num);
+	if (!opp_stat || num <= 0 || idx >= (unsigned int)num)
+		return;
 
+	Active_us = (TSDiff_us * loading / 100);
+	opp_stat[idx].ui64Active += Active_us;
+	opp_stat[idx].ui64Idle += (TSDiff_us - Active_us);
 }
 
 int ged_dvfs_init_opp_cost(void)
 {
+	struct GED_DVFS_OPP_STAT *stat;
 	int oppsize;
 	int i;
 
 	oppsize = mt_gpufreq_get_dvfs_table_num();
 
-	if (oppsize <= 0)
+	if (oppsize <= 0 || mt_gpufreq_get_freq_by_idx(0) == 0)
 		return -EPROBE_DEFER;
 
-	g_aOppStat = vmalloc(sizeof(struct GED_DVFS_OPP_STAT) * oppsize);
+	stat = vmalloc(sizeof(struct GED_DVFS_OPP_STAT) * oppsize);
+	if (!stat)
+		return -ENOMEM;
 
-	for (i = 0; i < oppsize; i++)
-		g_aOppStat[i].uMem.aTrans = vmalloc(sizeof(uint32_t) * oppsize);
+	memset(stat, 0, sizeof(struct GED_DVFS_OPP_STAT) * oppsize);
 
-	g_num = oppsize;
-	ged_dvfs_reset_opp_cost(oppsize);
+	for (i = 0; i < oppsize; i++) {
+		stat[i].uMem.aTrans = vmalloc(sizeof(uint32_t) * oppsize);
+		if (!stat[i].uMem.aTrans) {
+			while (--i >= 0)
+				vfree(stat[i].uMem.aTrans);
+			vfree(stat);
+			return -ENOMEM;
+		}
+		memset(stat[i].uMem.aTrans, 0, sizeof(uint32_t) * oppsize);
+	}
+
+	smp_wmb();
+	WRITE_ONCE(g_num, oppsize);
+	smp_wmb();
+	WRITE_ONCE(g_aOppStat, stat);
 
 	return 0;
 }
 
 static void ged_dvfs_deinit_opp_cost(void)
 {
+	struct GED_DVFS_OPP_STAT *stat;
+	int num;
 	int i;
-	int oppsize;
 
-	oppsize = mt_gpufreq_get_dvfs_table_num();
+	stat = g_aOppStat;
+	num = g_num;
 
-	if (g_aOppStat) {
-		for (i = 0; i < oppsize; i++)
-			vfree(g_aOppStat[i].uMem.aTrans);
+	WRITE_ONCE(g_aOppStat, NULL);
+	smp_wmb();
+	WRITE_ONCE(g_num, 0);
+
+	if (stat) {
+		for (i = 0; i < num; i++)
+			vfree(stat[i].uMem.aTrans);
+		vfree(stat);
 	}
-
-	vfree(g_aOppStat);
 }
 #endif /* CONFIG_MTK_GPU_OPP_STATS_SUPPORT */
 
