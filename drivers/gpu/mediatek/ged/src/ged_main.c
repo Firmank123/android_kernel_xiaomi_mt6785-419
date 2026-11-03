@@ -414,6 +414,20 @@ static int ged_pdrv_probe(struct platform_device *pdev)
 
 	GED_LOGI("@%s: start to probe ged driver\n", __func__);
 
+#ifdef CONFIG_MTK_GPU_OPP_STATS_SUPPORT
+	/* Defer before publishing callbacks if the gpufreq OPP table is not ready. */
+	err = ged_dvfs_init_opp_cost();
+	if (err == -EPROBE_DEFER) {
+		GED_LOGE("@%s: gpufreq opp table not ready (%d), deferring probe\n",
+			__func__, err);
+		return err;
+	}
+	if (err) {
+		GED_LOGE("@%s: failed to init opp cost stats (%d), stats unavailable\n",
+			__func__, err);
+	}
+#endif /* CONFIG_MTK_GPU_OPP_STATS_SUPPORT */
+
 	if (proc_create(GED_DRIVER_DEVICE_NAME, 0644, NULL, &ged_fops)
 		== NULL) {
 		err = GED_ERROR_FAIL;
@@ -450,12 +464,6 @@ static int ged_pdrv_probe(struct platform_device *pdev)
 	err = ged_notify_sw_vsync_system_init();
 	if (unlikely(err != GED_OK)) {
 		GED_LOGE("Failed to init notify sw vsync!\n");
-		goto ERROR;
-	}
-
-	err = ged_dvfs_system_init();
-	if (unlikely(err != GED_OK)) {
-		GED_LOGE("Failed to init common dvfs!\n");
 		goto ERROR;
 	}
 
@@ -526,19 +534,11 @@ static int ged_pdrv_probe(struct platform_device *pdev)
 	gpufreq_ged_log = 0;
 #endif /* GED_BUFFER_LOG_DISABLE */
 
-#ifdef CONFIG_MTK_GPU_OPP_STATS_SUPPORT
-	err = ged_dvfs_init_opp_cost();
-	if (err) {
-		if (err == -EPROBE_DEFER) {
-			GED_LOGE("@%s: gpufreq opp table not ready (%d), deferring probe\n",
-				__func__, err);
-			goto ERROR;
-		}
-		GED_LOGE("@%s: failed to init opp cost stats (%d), stats unavailable\n",
-			__func__, err);
-		err = GED_OK;
+	err = ged_dvfs_system_init();
+	if (unlikely(err != GED_OK)) {
+		GED_LOGE("Failed to init common dvfs!\n");
+		goto ERROR;
 	}
-#endif /* CONFIG_MTK_GPU_OPP_STATS_SUPPORT */
 
 	GED_LOGI("@%s: ged driver probe done\n", __func__);
 

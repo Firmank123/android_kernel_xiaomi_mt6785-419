@@ -13,6 +13,7 @@
 #include <linux/slab.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
+#include <linux/overflow.h>
 #include <linux/fb.h>
 #include <mt-plat/mtk_gpu_utility.h>
 
@@ -36,6 +37,34 @@ static struct dentry *gpsOppCostsEntry;
 #endif /* CONFIG_MTK_GPU_OPP_STATS_SUPPORT */
 #endif
 static struct kobject *hal_kobj;
+
+#ifdef CONFIG_MTK_GPU_OPP_STATS_SUPPORT
+static struct GED_DVFS_OPP_STAT *ged_dvfs_alloc_opp_report(unsigned int num)
+{
+	struct GED_DVFS_OPP_STAT *report;
+	size_t report_size, trans_count, trans_size, total_size;
+	uint32_t *trans;
+	int i;
+
+	if (!num ||
+	    check_mul_overflow((size_t)num, (size_t)num, &trans_count) ||
+	    check_mul_overflow(trans_count, sizeof(*trans), &trans_size) ||
+	    check_mul_overflow((size_t)num, sizeof(*report), &report_size) ||
+	    check_add_overflow(report_size, trans_size, &total_size))
+		return NULL;
+
+	report = vmalloc(total_size);
+	if (!report)
+		return NULL;
+
+	memset(report, 0, report_size);
+	trans = (uint32_t *)(report + num);
+	for (i = 0; i < num; i++)
+		report[i].uMem.aTrans = trans + (size_t)i * num;
+
+	return report;
+}
+#endif /* CONFIG_MTK_GPU_OPP_STATS_SUPPORT */
 
 int tokenizer(char *pcSrc, int i32len, int *pi32IndexArray, int i32NumToken)
 {
@@ -129,13 +158,7 @@ static int ged_dvfs_opp_cost_seq_show(struct seq_file *psSeqFile,
 		struct GED_DVFS_OPP_STAT *report;
 
 		mtk_custom_get_gpu_freq_level_count(&ui32FqCount);
-		report = NULL;
-
-		if (ui32FqCount) {
-			report =
-				vmalloc(sizeof(struct GED_DVFS_OPP_STAT) *
-					ui32FqCount);
-		}
+		report = ged_dvfs_alloc_opp_report(ui32FqCount);
 
 		if (!ged_dvfs_query_opp_cost(report, ui32FqCount, false)) {
 
@@ -215,13 +238,7 @@ static ssize_t opp_logs_show(struct kobject *kobj,
 	struct GED_DVFS_OPP_STAT *report;
 
 	mtk_custom_get_gpu_freq_level_count(&ui32FqCount);
-	report = NULL;
-
-	if (ui32FqCount) {
-		report =
-			vmalloc(sizeof(struct GED_DVFS_OPP_STAT) *
-			ui32FqCount);
-	}
+	report = ged_dvfs_alloc_opp_report(ui32FqCount);
 
 	if (!ged_dvfs_query_opp_cost(report, ui32FqCount, false)) {
 

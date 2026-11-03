@@ -27,6 +27,7 @@
 #include <linux/sched.h>
 #include <linux/sched/signal.h>
 #include <linux/vmalloc.h>
+#include <linux/rcupdate.h>
 
 #include "disp_session.h"
 #include "ged_dvfs.h"
@@ -51,6 +52,7 @@ spinlock_t gsGpuUtilLock;
 #endif
 static struct mutex gsDVFSLock;
 static struct mutex gsVSyncOffsetLock;
+static bool ged_dvfs_system_initialized;
 
 static unsigned int g_iSkipCount;
 static int g_dvfs_skip_round;
@@ -60,7 +62,7 @@ static unsigned int gpu_dvfs_enable;
 static unsigned int gpu_debug_enable;
 static unsigned int g_lb_down_count = 1;
 #ifdef CONFIG_MTK_GPU_OPP_STATS_SUPPORT
-static struct GED_DVFS_OPP_STAT *g_aOppStat;
+static struct GED_DVFS_OPP_STAT __rcu *g_aOppStat;
 static int g_num;
 #endif /* CONFIG_MTK_GPU_OPP_STATS_SUPPORT */
 unsigned long long g_ns_gpu_on_ts;
@@ -564,19 +566,22 @@ void ged_opp_stat_step(void)
 	struct GED_DVFS_OPP_STAT *opp_stat;
 	int num;
 
-	opp_stat = READ_ONCE(g_aOppStat);
+	rcu_read_lock();
+	opp_stat = rcu_dereference(g_aOppStat);
 	num = READ_ONCE(g_num);
 	if (!opp_stat || num <= 0)
-		return;
+		goto out;
 
 	if (g_ui32PreFreqID >= (unsigned int)num ||
 	    g_ui32CurFreqID >= (unsigned int)num)
-		return;
+		goto out;
 
 	if (!opp_stat[g_ui32PreFreqID].uMem.aTrans)
-		return;
+		goto out;
 
 	opp_stat[g_ui32PreFreqID].uMem.aTrans[g_ui32CurFreqID]++;
+out:
+	rcu_read_unlock();
 }
 #endif /* CONFIG_MTK_GPU_OPP_STATS_SUPPORT */
 
@@ -658,8 +663,7 @@ bool ged_dvfs_gpu_freq_commit(unsigned long ui32NewFreqID,
 				g_ui32PreFreqID = ui32CurFreqID;
 				g_ui32CurFreqID = ui32NewFreqID;
 #ifdef CONFIG_MTK_GPU_OPP_STATS_SUPPORT
-				if (g_aOppStat)
-					ged_opp_stat_step();
+				ged_opp_stat_step();
 #endif /* CONFIG_MTK_GPU_OPP_STATS_SUPPORT */
 			}
 		}
@@ -2168,10 +2172,11 @@ void ged_dvfs_reset_opp_cost(int oppsize)
 	int num;
 	int i;
 
-	opp_stat = READ_ONCE(g_aOppStat);
+	rcu_read_lock();
+	opp_stat = rcu_dereference(g_aOppStat);
 	num = READ_ONCE(g_num);
 	if (!opp_stat || num <= 0)
-		return;
+		goto out;
 
 	if (oppsize <= 0 || oppsize > num)
 		oppsize = num;
@@ -2184,6 +2189,8 @@ void ged_dvfs_reset_opp_cost(int oppsize)
 			       sizeof(uint32_t) * oppsize);
 		}
 	}
+out:
+	rcu_read_unlock();
 }
 
 int ged_dvfs_query_opp_cost(struct GED_DVFS_OPP_STAT *psReport,
@@ -2193,16 +2200,27 @@ int ged_dvfs_query_opp_cost(struct GED_DVFS_OPP_STAT *psReport,
 	int num;
 	int i;
 
-	opp_stat = READ_ONCE(g_aOppStat);
+	rcu_read_lock();
+	opp_stat = rcu_dereference(g_aOppStat);
 	num = READ_ONCE(g_num);
 	if (!opp_stat || num <= 0 || !psReport)
-		return -1;
+		goto out_unlock;
 
 	if (i32NumOpp <= 0 || i32NumOpp > num)
-		return -1;
+		goto out_unlock;
 
-	memcpy(psReport, opp_stat,
-		i32NumOpp * sizeof(struct GED_DVFS_OPP_STAT));
+	for (i = 0; i < i32NumOpp; i++) {
+		if (!psReport[i].uMem.aTrans || !opp_stat[i].uMem.aTrans)
+			goto out_unlock;
+	}
+
+	for (i = 0; i < i32NumOpp; i++) {
+		psReport[i].ui64Active = opp_stat[i].ui64Active;
+		psReport[i].ui64Idle = opp_stat[i].ui64Idle;
+		memcpy(psReport[i].uMem.aTrans, opp_stat[i].uMem.aTrans,
+		       i32NumOpp * sizeof(*psReport[i].uMem.aTrans));
+	}
+	rcu_read_unlock();
 
 	if (bStript) {
 		for (i = 0; i < i32NumOpp; i++) {
@@ -2211,6 +2229,10 @@ int ged_dvfs_query_opp_cost(struct GED_DVFS_OPP_STAT *psReport,
 		}
 	}
 	return 0;
+
+out_unlock:
+	rcu_read_unlock();
+	return -1;
 }
 
 void ged_dvfs_update_opp_cost(unsigned int loading,
@@ -2221,14 +2243,17 @@ void ged_dvfs_update_opp_cost(unsigned int loading,
 	unsigned int Active_us;
 	(void) cur_us;
 
-	opp_stat = READ_ONCE(g_aOppStat);
+	rcu_read_lock();
+	opp_stat = rcu_dereference(g_aOppStat);
 	num = READ_ONCE(g_num);
 	if (!opp_stat || num <= 0 || idx >= (unsigned int)num)
-		return;
+		goto out;
 
 	Active_us = (TSDiff_us * loading / 100);
 	opp_stat[idx].ui64Active += Active_us;
 	opp_stat[idx].ui64Idle += (TSDiff_us - Active_us);
+out:
+	rcu_read_unlock();
 }
 
 int ged_dvfs_init_opp_cost(void)
@@ -2259,10 +2284,8 @@ int ged_dvfs_init_opp_cost(void)
 		memset(stat[i].uMem.aTrans, 0, sizeof(uint32_t) * oppsize);
 	}
 
-	smp_wmb();
 	WRITE_ONCE(g_num, oppsize);
-	smp_wmb();
-	WRITE_ONCE(g_aOppStat, stat);
+	rcu_assign_pointer(g_aOppStat, stat);
 
 	return 0;
 }
@@ -2273,11 +2296,10 @@ static void ged_dvfs_deinit_opp_cost(void)
 	int num;
 	int i;
 
-	stat = g_aOppStat;
-	num = g_num;
-
-	WRITE_ONCE(g_aOppStat, NULL);
-	smp_wmb();
+	stat = rcu_access_pointer(g_aOppStat);
+	num = READ_ONCE(g_num);
+	RCU_INIT_POINTER(g_aOppStat, NULL);
+	synchronize_rcu();
 	WRITE_ONCE(g_num, 0);
 
 	if (stat) {
@@ -2425,6 +2447,7 @@ GED_ERROR ged_dvfs_system_init(void)
 	gpu_dvfs_enable = 0;
 #endif /* ENABLE_COMMON_DVFS */
 
+	ged_dvfs_system_initialized = true;
 	return GED_OK;
 }
 
@@ -2433,8 +2456,11 @@ void ged_dvfs_system_exit(void)
 #ifdef CONFIG_MTK_GPU_OPP_STATS_SUPPORT
 	ged_dvfs_deinit_opp_cost();
 #endif /* CONFIG_MTK_GPU_OPP_STATS_SUPPORT */
-	mutex_destroy(&gsDVFSLock);
-	mutex_destroy(&gsVSyncOffsetLock);
+	if (ged_dvfs_system_initialized) {
+		mutex_destroy(&gsDVFSLock);
+		mutex_destroy(&gsVSyncOffsetLock);
+		ged_dvfs_system_initialized = false;
+	}
 }
 
 #ifdef CONFIG_MTK_QOS_V1_SUPPORT

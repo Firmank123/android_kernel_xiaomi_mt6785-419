@@ -152,6 +152,7 @@ void ged_dvfs_update_opp_cost(unsigned int loading,
 	unsigned int TSDiff_us, unsigned long long cur_us, unsigned int idx);
 #define OPP_STAT_DEINIT 0xdead5566
 #define OPP_STAT_QUERY 0x0
+/* Each report row must provide storage for i32NumOpp transition counters. */
 int ged_dvfs_query_opp_cost(struct GED_DVFS_OPP_STAT *psReport,
 	int i32NumOpp, bool bStript);
 int ged_dvfs_init_opp_cost(void);
