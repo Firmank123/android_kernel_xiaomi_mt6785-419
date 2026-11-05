@@ -633,7 +633,6 @@ struct mt_charger {
 	struct power_supply_desc main_desc;
 	struct power_supply_config main_cfg;
 	struct power_supply *main_psy;
-	struct power_supply *charger_identify_psy;
 	struct chg_type_info *cti;
 	bool chg_online; /* Has charger in or not */
 	bool vbus_disable;
