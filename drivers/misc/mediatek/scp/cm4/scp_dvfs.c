@@ -169,7 +169,7 @@ static int scp_get_sub_feature_idx(enum subsys_enum sys_e,
 			break;
 	}
 
-	if (i == SUB_FEATURE_NUM) {
+	if (i == sd[sys_e].num) {
 		pr_err("cannot find feature index\n");
 		return -EINVAL;
 	}
@@ -210,7 +210,7 @@ static int scp_get_sub_feature_onoff(enum subsys_enum sys_e,
 static unsigned int *scp_get_sub_register_cfg(enum subsys_enum sys_e,
 		enum sub_feature_enum comp_e)
 {
-	struct regmap *regmap = sd[sys_e].regmap;
+	struct regmap *regmap;
 	struct sub_feature_data *fd;
 	unsigned int *ret;
 	unsigned int val = 0;
@@ -219,6 +219,7 @@ static unsigned int *scp_get_sub_register_cfg(enum subsys_enum sys_e,
 	if (sys_e >= SYS_NUM || comp_e >= SUB_FEATURE_NUM)
 		return NULL;
 
+	regmap = sd[sys_e].regmap;
 	fd = scp_get_sub_feature(sys_e, comp_e);
 	if (!fd) {
 		pr_err("fd is NULL\n");
@@ -268,13 +269,14 @@ static unsigned int scp_set_sub_register_cfg_internal(
 static int scp_set_sub_register_cfg(enum subsys_enum sys_e,
 		enum sub_feature_enum comp_e, bool on)
 {
-	struct regmap *regmap = sd[sys_e].regmap;
+	struct regmap *regmap;
 	struct sub_feature_data *fd = NULL;
 	int ret = 0;
 	int i;
 
 	if (sys_e >= SYS_NUM || comp_e >= SUB_FEATURE_NUM)
 		return -EINVAL;
+	regmap = sd[sys_e].regmap;
 	if (!regmap) {
 		pr_err("scp_dvfs: %d regmap is NULL\n", sys_e);
 		return  -EINVAL;
