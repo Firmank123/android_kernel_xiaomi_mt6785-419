@@ -1539,7 +1539,7 @@ static int __init mt_scp_dvfs_pdrv_probe(struct platform_device *pdev)
 	dvfs->scp_opp_num = ret;
 	/* init opp data structure */
 	opp = kcalloc(dvfs->scp_opp_num, sizeof(*opp), GFP_KERNEL);
-	if (!dvfs) {
+	if (!opp) {
 		kfree(dvfs);
 		kfree(buf);
 		kfree(sd);
