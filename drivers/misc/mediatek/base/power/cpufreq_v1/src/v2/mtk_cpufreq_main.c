@@ -1299,11 +1299,11 @@ static int _mt_cpufreq_init(struct cpufreq_policy *policy)
 	if (dev_pm_opp_of_cpumask_add_table(policy->cpus))
 		tag_pr_notice("failed to add opp framework table\n");
 
-	pd_ret = em_register_perf_domain(policy->cpus, NR_FREQ, &em_cb);
-	tag_pr_notice("energy model register result %d\n", pd_ret);
-
-	if (pd_ret)
-		tag_pr_notice("energy model regist fail\n");
+	if (!em_cpu_get(policy->cpu)) {
+		pd_ret = em_register_perf_domain(policy->cpus, NR_FREQ, &em_cb);
+		if (pd_ret)
+			tag_pr_notice("energy model register failed: %d\n", pd_ret);
+	}
 	if (ret)
 		tag_pr_notice("failed to setup frequency table\n");
 
