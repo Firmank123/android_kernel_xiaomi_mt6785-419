@@ -20,9 +20,9 @@
 #include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/platform_device.h>
+#include <linux/pm.h>
 #include <linux/power_supply.h>
 #include <linux/regmap.h>
-#include <linux/syscore_ops.h>
 
 #include <dt-bindings/iio/mt635x-auxadc.h>
 #include <mt-plat/aee.h>
@@ -51,6 +51,8 @@ struct mt635x_auxadc_device {
 	const struct auxadc_info *info;
 	int imp_vbat;
 	int imix_r;
+	int pre_uisoc;
+	bool imix_r_initialized;
 };
 
 /*
@@ -1058,31 +1060,22 @@ void auxadc_set_cali_fn(int channel,
 
 #define	IMIX_R_MIN_MOHM		100
 #define	IMIX_R_CALI_CNT		2
-static int auxadc_cali_imix_r(struct mt635x_auxadc_device *dev)
+static int auxadc_cali_imix_r(struct mt635x_auxadc_device *adc_dev)
 {
-	static struct mt635x_auxadc_device *adc_dev;
-	static int pre_uisoc = 101;
 	int cur_uisoc = auxadc_get_uisoc();
 	int i, imix_r_avg = 0, rac_val[IMIX_R_CALI_CNT];
 
-	if (dev) {
-		adc_dev = dev;
-		return 0;
-	} else if (!adc_dev) {
-		pr_info("%s NULL adc_dev, skip\n",
-			__func__);
-		return -EINVAL;
-	} else if (!get_mtk_gauge_psy()) {
+	if (!get_mtk_gauge_psy()) {
 		pr_info("%s gauge disabled, skip\n",
 			__func__);
 		return -ENODEV;
 	} else if (cur_uisoc < 0 ||
-		   cur_uisoc == pre_uisoc) {
+		   cur_uisoc == adc_dev->pre_uisoc) {
 		pr_info("%s pre_SOC=%d SOC=%d, skip\n",
-			__func__, pre_uisoc, cur_uisoc);
+			__func__, adc_dev->pre_uisoc, cur_uisoc);
 		return 0;
 	}
-	pre_uisoc = cur_uisoc;
+	adc_dev->pre_uisoc = cur_uisoc;
 	for (i = 0; i < IMIX_R_CALI_CNT; i++) {
 		rac_val[i] = auxadc_get_rac(adc_dev);
 		imix_r_avg += rac_val[i];
@@ -1104,29 +1097,33 @@ static int auxadc_init_imix_r(struct mt635x_auxadc_device *adc_dev,
 	unsigned int val = 0;
 	int ret;
 
+	adc_dev->imix_r_initialized = true;
 	if (adc_dev->imix_r)
 		return 0;
 	ret = of_property_read_u32(imix_r_node, "val", &val);
 	if (ret)
 		dev_notice(adc_dev->dev, "no imix_r, ret=%d\n", ret);
 	adc_dev->imix_r = (int)val;
-	auxadc_cali_imix_r(adc_dev);
 	return 0;
 }
 
-static int auxadc_suspend_enter(void)
+static int __maybe_unused mt635x_auxadc_suspend(struct device *dev)
 {
-	auxadc_cali_imix_r(NULL);
+	struct iio_dev *indio_dev = dev_get_drvdata(dev);
+	struct mt635x_auxadc_device *adc_dev = iio_priv(indio_dev);
+
+	mutex_lock(&adc_dev->lock);
+	if (adc_dev->imix_r_initialized)
+		auxadc_cali_imix_r(adc_dev);
 #if AUXADC_DEBUG
 	/* Restore bat_temp_prev when entering suspend */
 	mt635x_bat_temp_cali(NULL, -1, -1);
 #endif
+	mutex_unlock(&adc_dev->lock);
 	return 0;
 }
 
-static struct syscore_ops auxadc_syscore_ops = {
-	.suspend = auxadc_suspend_enter,
-};
+static SIMPLE_DEV_PM_OPS(mt635x_auxadc_pm_ops, mt635x_auxadc_suspend, NULL);
 
 static int auxadc_get_data_from_dt(struct mt635x_auxadc_device *adc_dev,
 				   unsigned int *channel,
@@ -1229,7 +1226,9 @@ static int mt635x_auxadc_probe(struct platform_device *pdev)
 	adc_dev = iio_priv(indio_dev);
 	adc_dev->regmap = chip->regmap;
 	adc_dev->dev = &pdev->dev;
+	adc_dev->pre_uisoc = 101;
 	mutex_init(&adc_dev->lock);
+	platform_set_drvdata(pdev, indio_dev);
 	device_init_wakeup(&pdev->dev, true);
 	adc_dev->info = of_device_get_match_data(&pdev->dev);
 
@@ -1251,7 +1250,6 @@ static int mt635x_auxadc_probe(struct platform_device *pdev)
 		dev_notice(&pdev->dev, "failed to register iio device!\n");
 		return ret;
 	}
-	register_syscore_ops(&auxadc_syscore_ops);
 #if AUXADC_DEBUG
 	switch (chip->chip_id) {
 	case MT6357_CHIP_ID:
@@ -1289,6 +1287,7 @@ static struct platform_driver mt635x_auxadc_driver = {
 	.driver = {
 		.name = "mt635x-auxadc",
 		.of_match_table = mt635x_auxadc_of_match,
+		.pm = &mt635x_auxadc_pm_ops,
 	},
 	.probe	= mt635x_auxadc_probe,
 };
