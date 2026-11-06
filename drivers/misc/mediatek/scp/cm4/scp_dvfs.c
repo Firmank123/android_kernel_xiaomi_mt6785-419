@@ -159,20 +159,16 @@ static int scp_get_sub_feature_idx(enum subsys_enum sys_e,
 	if (sys_e >= SYS_NUM || comp_e >= SUB_FEATURE_NUM)
 		return -EINVAL;
 
-	if(!sd[sys_e].regmap || !sd[sys_e].fd) {
-		pr_err("cannot find feature index\n");
-		return -EINVAL;
-	}
+	if (!sd[sys_e].regmap || !sd[sys_e].fd)
+		return -ENOENT;
 	for (i = 0; i < sd[sys_e].num; i++) {
 		if (!strcmp(sd[sys_e].fd[i].name,
 				sub_feature_name[comp_e]))
 			break;
 	}
 
-	if (i == sd[sys_e].num) {
-		pr_err("cannot find feature index\n");
-		return -EINVAL;
-	}
+	if (i == sd[sys_e].num)
+		return -ENOENT;
 
 	return i;
 }
@@ -186,8 +182,10 @@ static struct sub_feature_data *scp_get_sub_feature(enum subsys_enum sys_e,
 		return NULL;
 
 	idx = scp_get_sub_feature_idx(sys_e, comp_e);
-	if (idx < 0)
+	if (idx < 0) {
+		pr_err("cannot find feature index\n");
 		return NULL;
+	}
 
 	return &sd[sys_e].fd[idx];
 }
