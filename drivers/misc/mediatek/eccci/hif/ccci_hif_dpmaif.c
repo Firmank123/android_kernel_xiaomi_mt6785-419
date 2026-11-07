@@ -1442,11 +1442,10 @@ fast_retry:
 				DMA_FROM_DEVICE);
 		if (dma_mapping_error(ccci_dpmaif_get_dev(),
 			data_base_addr)) {
-			ccci_free_skb(new_skb);
 			CCCI_ERROR_LOG(dpmaif_ctrl->md_id, TAG,
 				"error dma mapping\n");
 			ret = DMA_MAPPING_ERR;
-			ccci_free_skb(new_skb);
+			dev_kfree_skb_any(new_skb);
 			break;
 		}
 
@@ -1468,9 +1467,12 @@ fast_retry:
 	wmb(); /* memory flush before pointer update. */
 	bat_req->bat_wr_idx = cur_bat_idx;
 #ifdef DPMAIF_DEBUG_LOG
-	CCCI_HISTORY_LOG(-1, TAG, "%s idx: 0x%x -> 0x%x, 0x%x, 0x%x, 0x%x\n",
-		__func__, bat_req->pkt_buf_sz, new_skb->len,
-		new_skb->truesize, cur_bat_idx, sizeof(struct skb_shared_info));
+	if (!ret)
+		CCCI_HISTORY_LOG(-1, TAG,
+			"%s idx: 0x%x -> 0x%x, 0x%x, 0x%x, 0x%x\n",
+			__func__, bat_req->pkt_buf_sz, new_skb->len,
+			new_skb->truesize, cur_bat_idx,
+			sizeof(struct skb_shared_info));
 #endif
 #if !defined(_E1_SB_SW_WORKAROUND_) && !defined(BAT_CNT_BURST_UPDATE)
 	/* update to HW: alloc a/bat_entry_num new skb, and HW can use */
