@@ -18,7 +18,6 @@
 #include <linux/highmem.h>
 
 #include <linux/kthread.h>
-#include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/proc_fs.h>
 #include <linux/uaccess.h>
@@ -546,13 +545,14 @@ static inline int set_memory_mapping(unsigned long start, phys_addr_t size,
 #endif
 
 static int memory_region_offline(struct SSMR_Feature *feature, phys_addr_t *pa,
-				 unsigned long *size, u64 upper_limit)
+				 unsigned long *size)
 {
 	int ret_map;
-	int offline_retry = 0;
 	struct device_node *np;
 	size_t alloc_size;
 	struct page *page;
+	dma_addr_t dma_addr;
+	void *vaddr;
 
 	if (!ssmr_dev) {
 		pr_info("%s: No ssmr device\n", __func__);
@@ -584,36 +584,23 @@ static int memory_region_offline(struct SSMR_Feature *feature, phys_addr_t *pa,
 	/* Determine alloc size by feature */
 	alloc_size = feature->req_size;
 
-	feature->alloc_size = alloc_size;
-
-	pr_info("%s[%d]: upper_limit: %llx, feature{ alloc_size : %lu",
-		__func__, __LINE__, upper_limit, alloc_size);
-
 	/*
 	 * setup init device with rmem
 	 */
 	of_reserved_mem_device_init_by_idx(ssmr_dev, ssmr_dev->of_node, 0);
 
-	do {
-		pr_info("[SSMR-ALLOCATION]: retry: %d\n", offline_retry);
-		feature->virt_addr = dma_alloc_attrs(ssmr_dev, alloc_size,
-					&feature->phy_addr, GFP_KERNEL, DMA_ATTR_FORCE_CONTIGUOUS);
-		if (!feature->phy_addr) {
-			offline_retry++;
-			msleep(100);
-		}
-	} while (!feature->phy_addr && offline_retry < 20);
-
-	if (feature->phy_addr) {
-		pr_info("%s: pa=%pad is allocated\n", __func__,
-						&feature->phy_addr);
-		pr_info("%s: virt 0x%lx\n", __func__,
-				(unsigned long)phys_to_virt(
-				dma_to_phys(ssmr_dev, feature->phy_addr)));
-	} else {
-		pr_info("%s: ssmr offline failed\n", __func__);
-		return -1;
+	vaddr = dma_alloc_attrs(ssmr_dev, alloc_size, &dma_addr,
+				GFP_KERNEL | __GFP_NOWARN,
+				DMA_ATTR_FORCE_CONTIGUOUS);
+	if (!vaddr) {
+		pr_warn_ratelimited("%s: %s allocation of %zu bytes failed\n",
+				    __func__, feature->feat_name, alloc_size);
+		return -ENOMEM;
 	}
+
+	feature->virt_addr = vaddr;
+	feature->phy_addr = dma_addr;
+	feature->alloc_size = alloc_size;
 
 	/*unmap offline memory */
 	ret_map = memory_unmapping((unsigned long)
@@ -651,7 +638,7 @@ static int _ssmr_offline_internal(phys_addr_t *pa, unsigned long *size,
 	}
 
 	feature->state = SSMR_STATE_OFFING;
-	retval = memory_region_offline(feature, pa, size, upper_limit);
+	retval = memory_region_offline(feature, pa, size);
 
 	if (retval < 0) {
 		feature->state = SSMR_STATE_ON;
@@ -720,9 +707,11 @@ static int memory_region_online(struct SSMR_Feature *feature)
 			feature->is_unmapping = false;
 	}
 
-	if (feature->phy_addr && !feature->is_unmapping) {
+	if (feature->virt_addr && !feature->is_unmapping) {
 		dma_free_attrs(ssmr_dev, alloc_size,
-				feature->virt_addr, feature->phy_addr, 0);
+				feature->virt_addr, feature->phy_addr,
+				DMA_ATTR_FORCE_CONTIGUOUS);
+		feature->virt_addr = NULL;
 		feature->alloc_size = 0;
 		feature->phy_addr = 0;
 	}
