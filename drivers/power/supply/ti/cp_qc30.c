@@ -1042,8 +1042,7 @@ void cp_statemachine(struct cp_qc30_data *chip)
 			tune_vbus_retry = 0;
 		}
 
-		qc3_get_batt_current_thermal_level(&thermal_level);
-		charger_manager_set_prop_system_temp_level(thermal_level);
+		charger_manager_apply_system_temp_level();
 		cp_get_qc_hvdcp3_type();
 		if (pm_state.hvdcp3_type == HVDCP3_CLASSB_27W) {
 			sys_config.bus_volt_alarm_threshold = BUS_OVP_ALARM_THRESHOLD_QC30;
