@@ -362,6 +362,8 @@ static struct platform_driver trusted_mem_driver = {
 	.driver = {
 		.name = "trusted_mem",
 		.of_match_table = tm_of_match_table,
+		/* External SSMR callers can hold regions across requests. */
+		.suppress_bind_attrs = true,
 	},
 };
 module_platform_driver(trusted_mem_driver);

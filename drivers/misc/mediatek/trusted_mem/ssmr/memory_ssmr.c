@@ -55,6 +55,8 @@ static u64 ssmr_upper_limit = UPPER_LIMIT64;
 #endif
 
 static struct device *ssmr_dev;
+static DEFINE_MUTEX(ssmr_cma_lock);
+static bool ssmr_cma_ready;
 
 /* clang-format off */
 const char *const ssmr_state_text[NR_STATES] = {
@@ -381,34 +383,29 @@ static void show_scheme_status(u64 size)
 	}
 }
 
+static void release_reserved_cma_memory(void *data)
+{
+	of_reserved_mem_device_release(data);
+}
+
 static int get_reserved_cma_memory(struct device *dev)
 {
-	struct device_node *np;
-	struct reserved_mem *rmem;
+	int ret = 0;
 
-	np = of_parse_phandle(dev->of_node, "memory-region", 0);
+	mutex_lock(&ssmr_cma_lock);
+	if (ssmr_cma_ready)
+		goto out;
 
-	if (!np) {
-		pr_info("%s, no ssmr region\n", __func__);
-		return -EINVAL;
-	}
+	ret = of_reserved_mem_device_init_by_idx(dev, dev->of_node, 0);
+	if (ret)
+		goto out;
 
-	rmem = of_reserved_mem_lookup(np);
-	of_node_put(np);
-
-	if (!rmem) {
-		pr_info("%s, no ssmr device info\n", __func__);
-		return -EINVAL;
-	}
-
-	pr_info("resource base=%pa, size=%pa\n", &rmem->base, &rmem->size);
-
-	/*
-	 * setup init device with rmem
-	 */
-	of_reserved_mem_device_init_by_idx(dev, dev->of_node, 0);
-
-	return 0;
+	ret = devm_add_action_or_reset(dev, release_reserved_cma_memory, dev);
+	if (!ret)
+		ssmr_cma_ready = true;
+out:
+	mutex_unlock(&ssmr_cma_lock);
+	return ret;
 }
 
 #ifdef CONFIG_ARM64
@@ -547,8 +544,8 @@ static inline int set_memory_mapping(unsigned long start, phys_addr_t size,
 static int memory_region_offline(struct SSMR_Feature *feature, phys_addr_t *pa,
 				 unsigned long *size)
 {
+	int ret;
 	int ret_map;
-	struct device_node *np;
 	size_t alloc_size;
 	struct page *page;
 	dma_addr_t dma_addr;
@@ -574,20 +571,12 @@ static int memory_region_offline(struct SSMR_Feature *feature, phys_addr_t *pa,
 		return 0;
 	}
 
-	np = of_parse_phandle(ssmr_dev->of_node, "memory-region", 0);
-
-	if (!np) {
-		pr_info(" %s, no ssmr region\n", __func__);
-		return -EINVAL;
-	}
+	ret = get_reserved_cma_memory(ssmr_dev);
+	if (ret)
+		return ret;
 
 	/* Determine alloc size by feature */
 	alloc_size = feature->req_size;
-
-	/*
-	 * setup init device with rmem
-	 */
-	of_reserved_mem_device_init_by_idx(ssmr_dev, ssmr_dev->of_node, 0);
 
 	vaddr = dma_alloc_attrs(ssmr_dev, alloc_size, &dma_addr,
 				GFP_KERNEL | __GFP_NOWARN,
@@ -878,8 +867,9 @@ int ssmr_probe(struct platform_device *pdev)
 
 	pr_info("memory_ssmr driver probe done\n");
 
-	ssmr_dev = &pdev->dev;
 	pdev->dev.coherent_dma_mask = DMA_BIT_MASK(64);
+	ssmr_cma_ready = false;
+	ssmr_dev = &pdev->dev;
 
 	/* setup secure feature size */
 	setup_feature_size();
@@ -907,8 +897,6 @@ int ssmr_probe(struct platform_device *pdev)
 	memory_ssmr_sysfs_init();
 #endif
 #endif
-
-	get_reserved_cma_memory(&pdev->dev);
 
 	return 0;
 }
