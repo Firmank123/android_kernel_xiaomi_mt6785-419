@@ -400,17 +400,18 @@ static void swchg_select_charging_current_limit(struct charger_manager *info)
 		else
 			thermal_input_current = val.intval;
 
-		if (thermal_current_limit < pdata->charging_current_limit ||
-			thermal_input_current < pdata->input_current_limit) {
-			if (info->usb_type == POWER_SUPPLY_TYPE_USB_HVDCP_3P5 ||
-				info->usb_type == POWER_SUPPLY_TYPE_USB_HVDCP_3 ||
-				info->usb_type == POWER_SUPPLY_TYPE_USB_PD) {
+		if (info->usb_type == POWER_SUPPLY_TYPE_USB_HVDCP_3P5 ||
+		    info->usb_type == POWER_SUPPLY_TYPE_USB_HVDCP_3 ||
+		    info->usb_type == POWER_SUPPLY_TYPE_USB_PD) {
+			if (thermal_current_limit >= 0 &&
+			    thermal_current_limit < pdata->charging_current_limit) {
 				pdata->charging_current_limit = thermal_current_limit;
 				pr_err("thermal set FCC is %d\n", thermal_current_limit);
-			} else if (thermal_input_current > 0) {
-				pdata->input_current_limit = thermal_input_current;
-				pr_err("thermal set ICL is %d\n", thermal_input_current);
 			}
+		} else if (thermal_input_current > 0 &&
+			   thermal_input_current < pdata->input_current_limit) {
+			pdata->input_current_limit = thermal_input_current;
+			pr_err("thermal set ICL is %d\n", thermal_input_current);
 		}
 	} else {
 		pr_err("battery_psy not found\n");
