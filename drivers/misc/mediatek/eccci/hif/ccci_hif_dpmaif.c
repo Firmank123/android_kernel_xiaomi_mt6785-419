@@ -1387,12 +1387,15 @@ static int dpmaif_alloc_rx_buf(struct dpmaif_bat_request *bat_req,
 	struct sk_buff *new_skb = NULL;
 	struct dpmaif_bat_t *cur_bat = NULL;
 	struct dpmaif_bat_skb_t *cur_skb = NULL;
+	gfp_t gfp = blocking ? GFP_KERNEL : GFP_ATOMIC | __GFP_NOWARN;
 	int ret = 0;
 	unsigned int i;
 	unsigned int buf_space;
 	unsigned short cur_bat_idx;
 	unsigned long long data_base_addr;
+#ifdef _97_REORDER_BAT_PAGE_TABLE_
 	unsigned int count = 0;
+#endif
 
 #ifdef DPMAIF_DEBUG_LOG_1
 	CCCI_HISTORY_LOG(-1, TAG, "%s 1: 0x%x, 0x%x\n", __func__,
@@ -1419,12 +1422,16 @@ static int dpmaif_alloc_rx_buf(struct dpmaif_bat_request *bat_req,
 	cur_bat_idx = bat_req->bat_wr_idx;
 	/*Set buffer to be used*/
 	for (i = 0 ; i < buf_cnt ; i++) {
+#ifdef _97_REORDER_BAT_PAGE_TABLE_
 fast_retry:
-		new_skb = __dev_alloc_skb(bat_req->pkt_buf_sz,
-			(blocking ? GFP_KERNEL : GFP_ATOMIC));
+#endif
+		new_skb = __dev_alloc_skb(bat_req->pkt_buf_sz, gfp);
+#ifdef _97_REORDER_BAT_PAGE_TABLE_
+		/* The reordered path has already consumed the RX buffer. */
 		if (unlikely(!new_skb && !blocking && count++ < 20))
 			goto fast_retry;
-		else if (unlikely(!new_skb)) {
+#endif
+		if (unlikely(!new_skb)) {
 			CCCI_ERROR_LOG(-1, TAG,
 				"alloc skb(%d) fail on q%d!(%d/%d)\n",
 				bat_req->pkt_buf_sz, q_num, cur_bat_idx,
