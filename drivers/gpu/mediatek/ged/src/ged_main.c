@@ -35,6 +35,7 @@
 #include "ged_hal.h"
 #include "ged_bridge.h"
 #include "ged_monitor_3D_fence.h"
+#include "ged_hybrid_adaptive.h"
 #include "ged_notify_sw_vsync.h"
 #include "ged_dvfs.h"
 #include "ged_kpi.h"
@@ -551,6 +552,8 @@ ERROR:
 
 static void ged_pdrv_cleanup(void)
 {
+	ged_hybrid_adaptive_quiesce();
+
 #ifndef GED_BUFFER_LOG_DISABLE
 	ged_log_buf_free(gpufreq_ged_log);
 	gpufreq_ged_log = 0;
