@@ -2803,6 +2803,7 @@ static const struct v4l2_ctrl_config mtk_color_desc_ctrl = {
 	.id = V4L2_CID_MPEG_MTK_COLOR_DESC,
 	.name = "MTK Color Description for HDR",
 	.type = V4L2_CTRL_TYPE_U32,
+	.flags = V4L2_CTRL_FLAG_READ_ONLY | V4L2_CTRL_FLAG_VOLATILE,
 	.min = 0x00000000,
 	.max = 0x00ffffff,
 	.step = 1,
@@ -2815,6 +2816,7 @@ static const struct v4l2_ctrl_config mtk_interlacing_ctrl = {
 	.id = V4L2_CID_MPEG_MTK_INTERLACING,
 	.name = "MTK Query Interlacing",
 	.type = V4L2_CTRL_TYPE_BOOLEAN,
+	.flags = V4L2_CTRL_FLAG_READ_ONLY | V4L2_CTRL_FLAG_VOLATILE,
 	.min = 0,
 	.max = 1,
 	.step = 1,
@@ -2826,6 +2828,7 @@ static const struct v4l2_ctrl_config mtk_codec_type_ctrl = {
 	.id = V4L2_CID_MPEG_MTK_CODEC_TYPE,
 	.name = "MTK Query HW/SW Codec Type",
 	.type = V4L2_CTRL_TYPE_U32,
+	.flags = V4L2_CTRL_FLAG_READ_ONLY,
 	.min = 0,
 	.max = 10,
 	.step = 1,
@@ -2874,18 +2877,9 @@ int mtk_vcodec_dec_ctrls_setup(struct mtk_vcodec_ctx *ctx)
 	if (ctrl)
 		ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE;
 
-	ctrl = v4l2_ctrl_new_custom(&ctx->ctrl_hdl,
-				&mtk_interlacing_ctrl, NULL);
-	if (ctrl)
-		ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE;
-
-	ctrl = v4l2_ctrl_new_custom(&ctx->ctrl_hdl,
-				&mtk_codec_type_ctrl, NULL);
-
-	ctrl = v4l2_ctrl_new_custom(&ctx->ctrl_hdl, &mtk_color_desc_ctrl, NULL);
-	if (ctrl)
-		ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE;
-
+	v4l2_ctrl_new_custom(&ctx->ctrl_hdl, &mtk_interlacing_ctrl, NULL);
+	v4l2_ctrl_new_custom(&ctx->ctrl_hdl, &mtk_codec_type_ctrl, NULL);
+	v4l2_ctrl_new_custom(&ctx->ctrl_hdl, &mtk_color_desc_ctrl, NULL);
 
 	/* s_ctrl */
 	ctrl = v4l2_ctrl_new_std(&ctx->ctrl_hdl,
