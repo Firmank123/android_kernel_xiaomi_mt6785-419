@@ -118,6 +118,7 @@ static int get_usb_type(struct charger_manager *info)
 			POWER_SUPPLY_PROP_REAL_TYPE, &val);
 	if (!ret)
 		info->usb_type = val.intval;
+	power_supply_put(usb_psy);
 
 	return ret;
 }
@@ -127,7 +128,7 @@ static void swchg_select_charging_current_limit(struct charger_manager *info)
 	struct charger_data *pdata = NULL;
 	struct switch_charging_alg_data *swchgalg = info->algorithm_data;
 	u32 ichg1_min = 0, aicr1_min = 0;
-	int ret = 0 ,rc = 0;
+	int ret = 0;
 	struct device *dev = NULL;
 	struct device_node *boot_node = NULL;
 	struct tag_bootmode *tag = NULL;
@@ -136,7 +137,6 @@ static void swchg_select_charging_current_limit(struct charger_manager *info)
 	int thermal_input_current = 3000000;
 	struct power_supply	*battery_psy;
 	union power_supply_propval val = {0,};
-	union power_supply_propval temp_level = {0,};
 #ifdef CONFIG_MTBF_SUPPORT
 	struct power_supply	*usb_psy;
 	bool is_powerpath_en = true;
@@ -161,12 +161,13 @@ static void swchg_select_charging_current_limit(struct charger_manager *info)
 				chr_err("%s: failed to get atag,boot\n", __func__);
 			} else
 				boot_mode = tag->bootmode;
+			of_node_put(boot_node);
 		}
 	}
 
 	if (info->pe5.online) {
 		chr_err("In PE5.0\n");
-		return;
+		goto put_supplies;
 	}
 
 	pdata = &info->chg1_data;
@@ -260,12 +261,7 @@ static void swchg_select_charging_current_limit(struct charger_manager *info)
 			pdata->input_current_limit = 3000000;
 			pr_info("PD set ICHG = 3000mA, AICR = 3000mA\n");
 		}
-		rc = power_supply_get_property(battery_psy,POWER_SUPPLY_PROP_CHARGE_CONTROL_LIMIT,&temp_level);
-		if (rc < 0) {
-			chr_err("Couldn't get POWER_SUPPLY_PROP_CHARGE_CONTROL_LIMIT mode:%d\n", rc);
-		}
-		chr_err(" Get POWER_SUPPLY_PROP_CHARGE_CONTROL_LIMIT mode:%d\n", temp_level.intval);
-		charger_manager_set_prop_system_temp_level(temp_level.intval);
+		charger_manager_apply_system_temp_level();
 	} else if (info->chr_type == STANDARD_HOST) {
 		if (IS_ENABLED(CONFIG_USBIF_COMPLIANCE)) {
 			if (info->usb_state == USB_SUSPEND)
@@ -314,7 +310,7 @@ static void swchg_select_charging_current_limit(struct charger_manager *info)
 			pr_info("QC2 set AICR = 1500mA\n");
 		}
 #ifdef CONFIG_BQ2597X_CHARGE_PUMP
-		charger_manager_set_prop_system_temp_level(info->temp_level);
+		charger_manager_apply_system_temp_level();
 #endif
 		mtk_pe20_set_charging_current(info,
 					&pdata->charging_current_limit,
@@ -404,17 +400,18 @@ static void swchg_select_charging_current_limit(struct charger_manager *info)
 		else
 			thermal_input_current = val.intval;
 
-		if (thermal_current_limit < pdata->charging_current_limit ||
-			thermal_input_current < pdata->input_current_limit) {
-			if (info->usb_type == POWER_SUPPLY_TYPE_USB_HVDCP_3P5 ||
-				info->usb_type == POWER_SUPPLY_TYPE_USB_HVDCP_3 ||
-				info->usb_type == POWER_SUPPLY_TYPE_USB_PD) {
+		if (info->usb_type == POWER_SUPPLY_TYPE_USB_HVDCP_3P5 ||
+		    info->usb_type == POWER_SUPPLY_TYPE_USB_HVDCP_3 ||
+		    info->usb_type == POWER_SUPPLY_TYPE_USB_PD) {
+			if (thermal_current_limit >= 0 &&
+			    thermal_current_limit < pdata->charging_current_limit) {
 				pdata->charging_current_limit = thermal_current_limit;
 				pr_err("thermal set FCC is %d\n", thermal_current_limit);
-			} else if (thermal_input_current > 0) {
-				pdata->input_current_limit = thermal_input_current;
-				pr_err("thermal set ICL is %d\n", thermal_input_current);
 			}
+		} else if (thermal_input_current > 0 &&
+			   thermal_input_current < pdata->input_current_limit) {
+			pdata->input_current_limit = thermal_input_current;
+			pr_err("thermal set ICL is %d\n", thermal_input_current);
 		}
 	} else {
 		pr_err("battery_psy not found\n");
@@ -518,6 +515,13 @@ done:
 	    pdata->charging_current_limit > ichg1_min && info->can_charging)
 		charger_dev_enable(info->chg1_dev, true);
 	mutex_unlock(&swchgalg->ichg_aicr_access_mutex);
+put_supplies:
+	if (battery_psy)
+		power_supply_put(battery_psy);
+#ifdef CONFIG_MTBF_SUPPORT
+	if (usb_psy)
+		power_supply_put(usb_psy);
+#endif
 }
 
 static void swchg_select_cv(struct charger_manager *info)
@@ -614,6 +618,7 @@ static void swchg_turn_on_charging(struct charger_manager *info)
 				chr_err("%s: failed to get atag,boot\n", __func__);
 			else
 				boot_mode = tag->bootmode;
+			of_node_put(boot_node);
 		}
 	}
 
@@ -1041,9 +1046,11 @@ int get_battery_capacity(void)
 	union power_supply_propval val = {0,};
 
 	battery_psy = power_supply_get_by_name("battery");
-	if (battery_psy)
+	if (battery_psy) {
 		power_supply_get_property(battery_psy,
 				POWER_SUPPLY_PROP_CAPACITY, &val);
+		power_supply_put(battery_psy);
+	}
 
 	return val.intval;
 }
@@ -1054,6 +1061,7 @@ static int mtk_switch_chr_cc(struct charger_manager *info)
 	struct switch_charging_alg_data *swchgalg = info->algorithm_data;
 	struct timespec time_now, charging_time;
 	int tmp = battery_get_bat_temperature();
+	int ret = 0;
 #ifdef CONFIG_BQ2597X_CHARGE_PUMP
 	int battery_capacity = 0;
 	static int qc2_recheck = 0;
@@ -1061,15 +1069,11 @@ static int mtk_switch_chr_cc(struct charger_manager *info)
 	struct power_supply *usb_psy;
 	struct power_supply *charger_identify_psy;
 	struct mt_charger *mt_chg = NULL;
-	if(info->usb_psy){
-		pr_err("ww_test usb_psy is NULL!/n");
-		mt_chg = power_supply_get_drvdata(info->usb_psy);
-	}
 	usb_psy = power_supply_get_by_name("usb");
-	charger_identify_psy = power_supply_get_by_name("Charger_Identify");
+	if (usb_psy)
+		mt_chg = power_supply_get_drvdata(usb_psy);
 	bq_charge_done = get_bq_charge_done(info);
 	battery_capacity = get_battery_capacity();
-	info->temp_level = charger_manager_get_prop_system_temp_level();
 #endif
 
 	if (info->enable_hv_charging == true)
@@ -1147,10 +1151,13 @@ static int mtk_switch_chr_cc(struct charger_manager *info)
 	}
 */
 
+#ifdef CONFIG_BQ2597X_CHARGE_PUMP
+	if (!mt_chg)
+		goto turn_on_charging;
+
 	if (mt_chg->usb_desc.type != POWER_SUPPLY_TYPE_USB_HVDCP)
 		qc2_recheck = 0;
 
-#ifdef CONFIG_BQ2597X_CHARGE_PUMP
 	if (adapter_is_support_pd_pps() &&
 		battery_capacity < 90 && !bq_charge_done &&
 		(info->sw_jeita.sm == TEMP_T2_TO_T3 ||
@@ -1159,12 +1166,13 @@ static int mtk_switch_chr_cc(struct charger_manager *info)
 		mt_chg->usb_desc.type = POWER_SUPPLY_TYPE_USB_PD;
 		swchgalg->state = CHR_XM_PD_PM;
 		charger_enable_vbus_ovp(info, false);
-		charger_manager_set_prop_system_temp_level(info->temp_level);
+		charger_manager_apply_system_temp_level();
 		charger_dev_enable(info->chg1_dev, true);
 		charger_dev_set_input_current(info->chg1_dev, 100000);
 		charger_dev_set_charging_current(info->chg1_dev, 3000000);
 		power_supply_changed(usb_psy);
-		return 1;
+		ret = 1;
+		goto out;
 	}
 #endif
 
@@ -1175,7 +1183,9 @@ static int mtk_switch_chr_cc(struct charger_manager *info)
 			chr_err("%s: enter PDC!\n", __func__);
 			info->stop_pdc_with_dis_hv = false;
 			swchgalg->state = CHR_PDC;
+#ifdef CONFIG_BQ2597X_CHARGE_PUMP
 			mt_chg->usb_desc.type = POWER_SUPPLY_TYPE_USB_PD;
+#endif
 			charger_enable_vbus_ovp(info, false);
 			if (mtk_pe20_get_is_enable(info)) {
 				mtk_pe20_set_is_enable(info, false);
@@ -1188,7 +1198,8 @@ static int mtk_switch_chr_cc(struct charger_manager *info)
 				if (mtk_pe_get_is_connect(info))
 					mtk_pe_reset_ta_vchr(info);
 			}
-			return 1;
+			ret = 1;
+			goto out;
 		} else {
 			info->stop_pdc_with_dis_hv = true;
 		}
@@ -1200,23 +1211,27 @@ static int mtk_switch_chr_cc(struct charger_manager *info)
 		if (mt_chg->usb_desc.type == POWER_SUPPLY_TYPE_USB_HVDCP_3 ||
 			mt_chg->usb_desc.type == POWER_SUPPLY_TYPE_USB_HVDCP_3P5) {
 			chr_err("%s: enter qc3.0 and qc35\n", __func__);
-			charger_manager_set_prop_system_temp_level(info->temp_level);
+			charger_manager_apply_system_temp_level();
 			swchgalg->state = CHR_XM_QC3;
 			charger_dev_enable(info->chg1_dev, true);
 			charger_dev_set_input_current(info->chg1_dev, 100000);
 			charger_dev_set_charging_current(info->chg1_dev, 3000000);
 			power_supply_changed(usb_psy);
-			return 1;
+			ret = 1;
+			goto out;
 		}
 	}
 
 	if (mt_chg->usb_desc.type == POWER_SUPPLY_TYPE_USB_HVDCP) {
-		charger_manager_set_prop_system_temp_level(info->temp_level);
+		charger_manager_apply_system_temp_level();
+		charger_identify_psy = power_supply_get_by_name("Charger_Identify");
 		if (!charger_identify_psy)
-			return 0;
+			goto out;
+		power_supply_put(charger_identify_psy);
 		chr_err("%s: enter qc2.0\n", __func__);
 		swchgalg->state = CHR_XM_QC20;
 	}
+turn_on_charging:
 #endif
 
 	swchg_turn_on_charging(info);
@@ -1228,7 +1243,12 @@ static int mtk_switch_chr_cc(struct charger_manager *info)
 		chr_err("%s: battery full!\n", __func__);
 	}
 
-	return 0;
+out:
+#ifdef CONFIG_BQ2597X_CHARGE_PUMP
+	if (usb_psy)
+		power_supply_put(usb_psy);
+#endif
+	return ret;
 }
 
 static int mtk_switch_chr_err(struct charger_manager *info)

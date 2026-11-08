@@ -103,8 +103,9 @@ struct ppm_limit_data {
 extern void mt_ppm_set_dvfs_table(unsigned int cpu,
 	struct cpufreq_frequency_table *tbl,
 	unsigned int num, enum dvfs_table_type type);
-extern void mt_ppm_register_client(enum ppm_client client,
+extern int mt_ppm_register_client(enum ppm_client client,
 	void (*limit)(struct ppm_client_req req));
+extern void mt_ppm_unregister_client(enum ppm_client client);
 
 /* SYS boost policy */
 extern void mt_ppm_sysboost_core(enum ppm_sysboost_user user,

@@ -1323,16 +1323,40 @@ static ssize_t available_frequencies_show(struct device *d,
 }
 static DEVICE_ATTR_RO(available_frequencies);
 
+static int devfreq_trans_stat_append(char *buf, size_t *len,
+				     const char *fmt, ...)
+{
+	va_list args;
+	size_t remaining;
+	int written;
+
+	if (*len >= PAGE_SIZE)
+		return -EFBIG;
+
+	remaining = PAGE_SIZE - *len;
+	va_start(args, fmt);
+	written = vsnprintf(buf + *len, remaining, fmt, args);
+	va_end(args);
+	if (written < 0)
+		return written;
+	if ((size_t)written >= remaining)
+		return -EFBIG;
+
+	*len += written;
+	return 0;
+}
+
 static ssize_t trans_stat_show(struct device *dev,
 			       struct device_attribute *attr, char *buf)
 {
 	struct devfreq *devfreq = to_devfreq(dev);
-	ssize_t len;
+	size_t len = 0;
 	int i, j;
+	int ret;
 	unsigned int max_state = devfreq->profile->max_state;
 
 	if (max_state == 0)
-		return sprintf(buf, "Not Supported.\n");
+		return scnprintf(buf, PAGE_SIZE, "Not Supported.\n");
 
 	mutex_lock(&devfreq->lock);
 	if (!devfreq->stop_polling &&
@@ -1342,32 +1366,54 @@ static ssize_t trans_stat_show(struct device *dev,
 	}
 	mutex_unlock(&devfreq->lock);
 
-	len = sprintf(buf, "     From  :   To\n");
-	len += sprintf(buf + len, "           :");
-	for (i = 0; i < max_state; i++)
-		len += sprintf(buf + len, "%10lu",
-				devfreq->profile->freq_table[i]);
-
-	len += sprintf(buf + len, "   time(ms)\n");
+	ret = devfreq_trans_stat_append(buf, &len, "     From  :   To\n");
+	if (ret)
+		return ret;
+	ret = devfreq_trans_stat_append(buf, &len, "           :");
+	if (ret)
+		return ret;
+	for (i = 0; i < max_state; i++) {
+		ret = devfreq_trans_stat_append(buf, &len, "%10lu",
+					       devfreq->profile->freq_table[i]);
+		if (ret)
+			return ret;
+	}
+	ret = devfreq_trans_stat_append(buf, &len, "   time(ms)\n");
+	if (ret)
+		return ret;
 
 	for (i = 0; i < max_state; i++) {
 		if (devfreq->profile->freq_table[i]
 					== devfreq->previous_freq) {
-			len += sprintf(buf + len, "*");
+			ret = devfreq_trans_stat_append(buf, &len, "*");
 		} else {
-			len += sprintf(buf + len, " ");
+			ret = devfreq_trans_stat_append(buf, &len, " ");
 		}
-		len += sprintf(buf + len, "%10lu:",
-				devfreq->profile->freq_table[i]);
-		for (j = 0; j < max_state; j++)
-			len += sprintf(buf + len, "%10u",
-				devfreq->trans_table[(i * max_state) + j]);
-		len += sprintf(buf + len, "%10u\n",
-			jiffies_to_msecs(devfreq->time_in_state[i]));
+		if (ret)
+			return ret;
+		ret = devfreq_trans_stat_append(buf, &len, "%10lu:",
+					       devfreq->profile->freq_table[i]);
+		if (ret)
+			return ret;
+		for (j = 0; j < max_state; j++) {
+			ret = devfreq_trans_stat_append(buf, &len, "%10u",
+						       devfreq->trans_table[
+							       (i * max_state) + j]);
+			if (ret)
+				return ret;
+		}
+		ret = devfreq_trans_stat_append(buf, &len, "%10u\n",
+					       jiffies_to_msecs(
+						       devfreq->time_in_state[i]));
+		if (ret)
+			return ret;
 	}
 
-	len += sprintf(buf + len, "Total transition : %u\n",
+	ret = devfreq_trans_stat_append(buf, &len, "Total transition : %u\n",
 					devfreq->total_trans);
+	if (ret)
+		return ret;
+
 	return len;
 }
 static DEVICE_ATTR_RO(trans_stat);

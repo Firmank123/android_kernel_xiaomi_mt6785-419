@@ -124,6 +124,7 @@ extern int charger_manager_is_input_suspend(void);
 extern int charger_manager_get_prop_system_temp_level(void);
 extern int charger_manager_get_prop_system_temp_level_max(void);
 extern void charger_manager_set_prop_system_temp_level(int temp_level);
+extern void charger_manager_apply_system_temp_level(void);
 extern void charger_manager_set_prop_set_temp_enable(int vol);
 extern int charger_manager_get_prop_set_temp_enable(void);
 extern void charger_manager_set_prop_set_temp_num(int vol);

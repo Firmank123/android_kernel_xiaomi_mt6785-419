@@ -1387,12 +1387,15 @@ static int dpmaif_alloc_rx_buf(struct dpmaif_bat_request *bat_req,
 	struct sk_buff *new_skb = NULL;
 	struct dpmaif_bat_t *cur_bat = NULL;
 	struct dpmaif_bat_skb_t *cur_skb = NULL;
+	gfp_t gfp = blocking ? GFP_KERNEL : GFP_ATOMIC | __GFP_NOWARN;
 	int ret = 0;
 	unsigned int i;
 	unsigned int buf_space;
 	unsigned short cur_bat_idx;
 	unsigned long long data_base_addr;
+#ifdef _97_REORDER_BAT_PAGE_TABLE_
 	unsigned int count = 0;
+#endif
 
 #ifdef DPMAIF_DEBUG_LOG_1
 	CCCI_HISTORY_LOG(-1, TAG, "%s 1: 0x%x, 0x%x\n", __func__,
@@ -1419,12 +1422,16 @@ static int dpmaif_alloc_rx_buf(struct dpmaif_bat_request *bat_req,
 	cur_bat_idx = bat_req->bat_wr_idx;
 	/*Set buffer to be used*/
 	for (i = 0 ; i < buf_cnt ; i++) {
+#ifdef _97_REORDER_BAT_PAGE_TABLE_
 fast_retry:
-		new_skb = __dev_alloc_skb(bat_req->pkt_buf_sz,
-			(blocking ? GFP_KERNEL : GFP_ATOMIC));
+#endif
+		new_skb = __dev_alloc_skb(bat_req->pkt_buf_sz, gfp);
+#ifdef _97_REORDER_BAT_PAGE_TABLE_
+		/* The reordered path has already consumed the RX buffer. */
 		if (unlikely(!new_skb && !blocking && count++ < 20))
 			goto fast_retry;
-		else if (unlikely(!new_skb)) {
+#endif
+		if (unlikely(!new_skb)) {
 			CCCI_ERROR_LOG(-1, TAG,
 				"alloc skb(%d) fail on q%d!(%d/%d)\n",
 				bat_req->pkt_buf_sz, q_num, cur_bat_idx,
@@ -1442,11 +1449,10 @@ fast_retry:
 				DMA_FROM_DEVICE);
 		if (dma_mapping_error(ccci_dpmaif_get_dev(),
 			data_base_addr)) {
-			ccci_free_skb(new_skb);
 			CCCI_ERROR_LOG(dpmaif_ctrl->md_id, TAG,
 				"error dma mapping\n");
 			ret = DMA_MAPPING_ERR;
-			ccci_free_skb(new_skb);
+			dev_kfree_skb_any(new_skb);
 			break;
 		}
 
@@ -1468,9 +1474,12 @@ fast_retry:
 	wmb(); /* memory flush before pointer update. */
 	bat_req->bat_wr_idx = cur_bat_idx;
 #ifdef DPMAIF_DEBUG_LOG
-	CCCI_HISTORY_LOG(-1, TAG, "%s idx: 0x%x -> 0x%x, 0x%x, 0x%x, 0x%x\n",
-		__func__, bat_req->pkt_buf_sz, new_skb->len,
-		new_skb->truesize, cur_bat_idx, sizeof(struct skb_shared_info));
+	if (!ret)
+		CCCI_HISTORY_LOG(-1, TAG,
+			"%s idx: 0x%x -> 0x%x, 0x%x, 0x%x, 0x%x\n",
+			__func__, bat_req->pkt_buf_sz, new_skb->len,
+			new_skb->truesize, cur_bat_idx,
+			sizeof(struct skb_shared_info));
 #endif
 #if !defined(_E1_SB_SW_WORKAROUND_) && !defined(BAT_CNT_BURST_UPDATE)
 	/* update to HW: alloc a/bat_entry_num new skb, and HW can use */

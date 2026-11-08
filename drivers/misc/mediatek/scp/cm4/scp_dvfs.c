@@ -159,20 +159,16 @@ static int scp_get_sub_feature_idx(enum subsys_enum sys_e,
 	if (sys_e >= SYS_NUM || comp_e >= SUB_FEATURE_NUM)
 		return -EINVAL;
 
-	if(!sd[sys_e].regmap || !sd[sys_e].fd) {
-		pr_err("cannot find feature index\n");
-		return -EINVAL;
-	}
+	if (!sd[sys_e].regmap || !sd[sys_e].fd)
+		return -ENOENT;
 	for (i = 0; i < sd[sys_e].num; i++) {
 		if (!strcmp(sd[sys_e].fd[i].name,
 				sub_feature_name[comp_e]))
 			break;
 	}
 
-	if (i == SUB_FEATURE_NUM) {
-		pr_err("cannot find feature index\n");
-		return -EINVAL;
-	}
+	if (i == sd[sys_e].num)
+		return -ENOENT;
 
 	return i;
 }
@@ -186,8 +182,10 @@ static struct sub_feature_data *scp_get_sub_feature(enum subsys_enum sys_e,
 		return NULL;
 
 	idx = scp_get_sub_feature_idx(sys_e, comp_e);
-	if (idx < 0)
+	if (idx < 0) {
+		pr_err("cannot find feature index\n");
 		return NULL;
+	}
 
 	return &sd[sys_e].fd[idx];
 }
@@ -210,7 +208,7 @@ static int scp_get_sub_feature_onoff(enum subsys_enum sys_e,
 static unsigned int *scp_get_sub_register_cfg(enum subsys_enum sys_e,
 		enum sub_feature_enum comp_e)
 {
-	struct regmap *regmap = sd[sys_e].regmap;
+	struct regmap *regmap;
 	struct sub_feature_data *fd;
 	unsigned int *ret;
 	unsigned int val = 0;
@@ -219,6 +217,7 @@ static unsigned int *scp_get_sub_register_cfg(enum subsys_enum sys_e,
 	if (sys_e >= SYS_NUM || comp_e >= SUB_FEATURE_NUM)
 		return NULL;
 
+	regmap = sd[sys_e].regmap;
 	fd = scp_get_sub_feature(sys_e, comp_e);
 	if (!fd) {
 		pr_err("fd is NULL\n");
@@ -268,21 +267,22 @@ static unsigned int scp_set_sub_register_cfg_internal(
 static int scp_set_sub_register_cfg(enum subsys_enum sys_e,
 		enum sub_feature_enum comp_e, bool on)
 {
-	struct regmap *regmap = sd[sys_e].regmap;
+	struct regmap *regmap;
 	struct sub_feature_data *fd = NULL;
 	int ret = 0;
 	int i;
 
 	if (sys_e >= SYS_NUM || comp_e >= SUB_FEATURE_NUM)
 		return -EINVAL;
+	regmap = sd[sys_e].regmap;
 	if (!regmap) {
 		pr_err("scp_dvfs: %d regmap is NULL\n", sys_e);
 		return  -EINVAL;
 	}
 
 	fd = scp_get_sub_feature(sys_e, comp_e);
-	if (!fd) {
-		pr_err("fd is NULL\n");
+	if (!fd || !fd->cfg) {
+		pr_err("sub-feature has no write configuration\n");
 		return -EINVAL;
 	}
 
@@ -1088,6 +1088,19 @@ fail_pmic:
 	return SCP_DVFS_DTSNO_PMIC_CONFIG;
 }
 
+static void scp_free_sub_features(struct sub_feature_data *fd, int num)
+{
+	int i;
+
+	if (!fd)
+		return;
+	for (i = 0; i < num; i++) {
+		kfree(fd[i].cfg);
+		kfree(fd[i].reg);
+	}
+	kfree(fd);
+}
+
 static  int __init mt_scp_sub_feature_init_internal(struct device_node *node,
 		struct sub_feature_data *fd)
 {
@@ -1102,12 +1115,17 @@ static  int __init mt_scp_sub_feature_init_internal(struct device_node *node,
 		return -ENOMEM;
 
 	ret = snprintf(buf, 25, "%s-reg", fd->name);
-	if (ret < 0 || ret >= 25)
+	if (ret < 0 || ret >= 25) {
+		ret = -EINVAL;
 		goto fail_1;
+	}
 
-	fd->num = of_property_count_u32_elems(node, buf) / 4;
-	if (fd->num <= 0)
-		goto pass;
+	ret = of_property_count_u32_elems(node, buf);
+	if (ret <= 0 || ret % 4) {
+		ret = -EINVAL;
+		goto fail_1;
+	}
+	fd->num = ret / 4;
 
 	reg = kcalloc(fd->num, sizeof(struct reg_info), GFP_KERNEL);
 
@@ -1143,17 +1161,25 @@ static  int __init mt_scp_sub_feature_init_internal(struct device_node *node,
 		}
 	}
 
-	fd->reg = reg;
-
 	ret = snprintf(buf, 25, "%s-cfg", fd->name);
-	if (ret < 0 || ret >= 25)
+	if (ret < 0 || ret >= 25) {
+		ret = -EINVAL;
 		goto fail_2;
+	}
 
-	cfg_num = of_property_count_u32_elems(node, buf) / 2;
-	if (cfg_num != fd->num) {
-		pr_debug("cfg number is not matched(%d)\n", cfg_num);
+	/* GPIO mux validation can provide registers without write settings. */
+	if (!of_find_property(node, buf, NULL)) {
+		fd->reg = reg;
 		goto pass;
 	}
+
+	ret = of_property_count_u32_elems(node, buf);
+	if (ret != fd->num * 2) {
+		pr_debug("cfg number is not matched(%d)\n", ret);
+		ret = -EINVAL;
+		goto fail_2;
+	}
+	cfg_num = ret / 2;
 
 	cfg = kcalloc(cfg_num, sizeof(struct reg_cfg), GFP_KERNEL);
 
@@ -1177,6 +1203,7 @@ static  int __init mt_scp_sub_feature_init_internal(struct device_node *node,
 		}
 	}
 
+	fd->reg = reg;
 	fd->cfg = cfg;
 pass:
 	kfree(buf);
@@ -1201,12 +1228,14 @@ static int __init mt_scp_sub_feature_init(struct device_node *node,
 	struct sub_feature_data *fd;
 	char *buf;
 	int ret;
-	int i, j;
+	int i;
 
 	/* init  feature data struct */
 	sys->num = of_property_count_strings(node, str);
-	if (sys->num <= 0)
-		goto pass;
+	if (sys->num <= 0) {
+		sys->num = 0;
+		return 0;
+	}
 
 	/* init feature data structure */
 	fd = kcalloc(sys->num, sizeof(*fd), GFP_KERNEL);
@@ -1229,35 +1258,31 @@ static int __init mt_scp_sub_feature_init(struct device_node *node,
 
 		fd[i].name = name;
 		ret = mt_scp_sub_feature_init_internal(node, &fd[i]);
-		if (ret) {
-			kfree(name);
+		if (ret)
 			goto fail_2;
-		}
 
 		/* init feature cfg */
 		ret = snprintf(buf, 25, "%s-cfg", str);
-		if (ret < 0 || ret >= 25)
+		if (ret < 0 || ret >= 25) {
+			ret = -EINVAL;
 			goto fail_2;
+		}
 
 		ret = of_property_read_u32_index(node, buf, i,
 				&fd[i].onoff);
-		if (ret) {
-			kfree(name);
+		if (ret)
 			goto fail_2;
-		}
 	}
 
 	sys->fd = fd;
 
 	kfree(buf);
-pass:
 	return 0;
 fail_2:
-	for (j = i - 1; j >= 0; j--)
-		kfree(fd[j].name);
 fail:
 	kfree(buf);
-	kfree(fd);
+	scp_free_sub_features(fd, sys->num);
+	sys->num = 0;
 	WARN_ON(1);
 
 	return ret;
@@ -1537,7 +1562,7 @@ static int __init mt_scp_dvfs_pdrv_probe(struct platform_device *pdev)
 	dvfs->scp_opp_num = ret;
 	/* init opp data structure */
 	opp = kcalloc(dvfs->scp_opp_num, sizeof(*opp), GFP_KERNEL);
-	if (!dvfs) {
+	if (!opp) {
 		kfree(dvfs);
 		kfree(buf);
 		kfree(sd);
@@ -1593,6 +1618,8 @@ static int __init mt_scp_dvfs_pdrv_probe(struct platform_device *pdev)
 	/* check if GPIO is configured correctly for SCP VREQ */
 	if (scp_get_sub_feature_onoff(SYS_GPIO, GPIO_MODE)) {
 		gpio_mode = scp_get_sub_register_cfg(SYS_GPIO, GPIO_MODE);
+		if (!gpio_mode)
+			goto fail;
 
 		if (*gpio_mode == 1)
 			pr_notice("v_req muxpin setting is correct\n");
@@ -1723,6 +1750,8 @@ fail:
 	kfree(opp);
 	kfree(dvfs);
 	kfree(buf);
+	for (i = 0; i < SYS_NUM; i++)
+		scp_free_sub_features(sd[i].fd, sd[i].num);
 	kfree(sd);
 	WARN_ON(1);
 

@@ -100,7 +100,6 @@ static int ibus_lmt_change_timer;
 //struct pdc_data *pdc_data_config;
 
 struct charger_device *ch1_dev = NULL;
-struct charger_device *ch2_dev = NULL;
 static struct charger_consumer *chg_consumer = NULL;
 
 static int usbpd_pm_check_cp_enabled(struct usbpd_pm *pdpm);
@@ -1675,13 +1674,6 @@ static void usb_psy_change_work(struct work_struct *work)
 			__func__, ch1_dev->props.alias_name);
 	else
 		pr_err("%s: *** Error : can't find primary charger ***\n", __func__);
-
-	ch2_dev = get_charger_by_name("secondary_chg");
-	if (ch2_dev)
-		pr_debug("%s: Found secondary charger [%s]\n",
-			__func__, ch2_dev->props.alias_name);
-	else
-		pr_err("%s: *** Error: can't find secondary charger\n", __func__);
 
 	ret = power_supply_get_property(pdpm->usb_psy,
 			POWER_SUPPLY_PROP_TYPEC_POWER_ROLE, &val);

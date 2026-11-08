@@ -5,6 +5,7 @@
 
 #include <linux/semaphore.h>
 #include <linux/time.h>
+#include <linux/ktime.h>
 #include <linux/jiffies.h>
 #include <linux/workqueue.h>
 #include <linux/atomic.h>
@@ -16,6 +17,7 @@
 #include <ged_dvfs.h>
 #include <ged_log.h>
 #include <ged.h>
+#include "ged_hybrid_adaptive.h"
 #include "ged_thread.h"
 /* #include <ged_vsync.h> */
 #ifdef MTK_GED_KPI
@@ -117,6 +119,10 @@ struct GED_KPI_HEAD {
 	GED_KPI_FRC_MODE_TYPE frc_mode;
 	int frc_client;
 	unsigned long long last_QedBufferDelay;
+	unsigned long adaptive_latest_frame_id;
+	u64 adaptive_latest_generation;
+	u64 adaptive_latest_queue_timestamp_ns;
+	int adaptive_target_fps_valid; /* explicit FPS hint, not GED default */
 };
 
 struct GED_CPU_INFO {
@@ -170,6 +176,12 @@ struct GED_KPI {
 	unsigned int gpu_freq; /* in MHz*/
 	unsigned int gpu_freq_max; /* in MHz*/
 	unsigned int gpu_loading;
+	unsigned int adaptive_gpu_loading;
+	u64 adaptive_generation;
+	u64 adaptive_queue_timestamp_ns;
+	u64 adaptive_fence_timestamp_ns;
+	int adaptive_fence_valid;
+	int adaptive_gpu_loading_valid;
 	struct list_head sList;
 	long long t_cpu_remained;
 	long long t_gpu_remained;
@@ -207,6 +219,11 @@ struct GED_TIMESTAMP {
 	unsigned int i32GPUloading;
 	int i32QedBuffer_length;
 	int isSF;
+	u64 adaptive_generation;
+	u64 adaptive_queue_timestamp_ns;
+	u64 adaptive_timestamp_ns;
+	int adaptive_fence_valid;
+	int adaptive_gpu_loading_valid;
 	struct work_struct sWork;
 	void *fence_addr;
 };
@@ -217,8 +234,16 @@ struct GED_KPI_GPU_TS {
 	unsigned long i32FrameID;
 	struct dma_fence_cb sSyncWaiter;
 	struct dma_fence *psSyncFence;
+	u64 adaptive_generation;
+	u64 adaptive_queue_timestamp_ns;
 	struct work_struct sWork;
 } GED_KPI_GPU_TS;
+
+struct GED_KPI_H_ITERATOR_CONTEXT {
+	struct GED_TIMESTAMP *timestamp;
+	struct ged_hybrid_adaptive_sample sample;
+	int sample_valid;
+};
 
 /* defined struct for querying from MEOW */
 struct GED_KPI_MEOW_DVFS_FREQ_PRED {
@@ -1028,11 +1053,75 @@ static GED_BOOL ged_kpi_tag_type_s(u64 ulID, struct GED_KPI_HEAD *psHead
 	}
 }
 /* ------------------------------------------------------------------- */
+static void ged_kpi_hybrid_adaptive_snapshot(
+	struct GED_KPI_H_ITERATOR_CONTEXT *context,
+	struct GED_KPI_HEAD *psHead, struct GED_KPI *psKPI)
+{
+	struct GED_TIMESTAMP *psTimeStamp = context->timestamp;
+	struct ged_hybrid_adaptive_sample sample;
+	long long frame_period_ns = 0;
+
+	/* Copy scalar evidence only; no GED head or fence pointer leaves worker. */
+	if (!psHead || !psKPI || psHead->isSF ||
+		psHead->pid != psKPI->pid || psHead->ullWnd != psKPI->ullWnd ||
+		!psKPI->adaptive_generation ||
+		!psKPI->adaptive_fence_valid ||
+		!psKPI->adaptive_gpu_loading_valid ||
+		psKPI->adaptive_generation !=
+			psHead->adaptive_latest_generation ||
+		psKPI->adaptive_queue_timestamp_ns !=
+			psHead->adaptive_latest_queue_timestamp_ns ||
+		psKPI->i32QueueID != psHead->adaptive_latest_frame_id ||
+		psKPI->t_cpu < 0 || psKPI->t_gpu < 0 ||
+		(psKPI->ulMask & (GED_TIMESTAMP_TYPE_S |
+		GED_TIMESTAMP_TYPE_2 | GED_TIMESTAMP_TYPE_H)) !=
+		(GED_TIMESTAMP_TYPE_S | GED_TIMESTAMP_TYPE_2 |
+		GED_TIMESTAMP_TYPE_H) ||
+		psTimeStamp->adaptive_timestamp_ns <
+			psKPI->adaptive_fence_timestamp_ns ||
+		psTimeStamp->adaptive_timestamp_ns -
+			psKPI->adaptive_fence_timestamp_ns >= GED_HA_LEASE_NS)
+		return;
+
+	if (context->sample_valid &&
+		psKPI->adaptive_queue_timestamp_ns <=
+		context->sample.queue_timestamp_ns)
+		return;
+
+	memset(&sample, 0, sizeof(sample));
+	sample.generation = psKPI->adaptive_generation;
+	sample.timestamp_ns = psTimeStamp->adaptive_timestamp_ns;
+	sample.queue_timestamp_ns =
+		psKPI->adaptive_queue_timestamp_ns;
+	sample.fence_timestamp_ns =
+		psKPI->adaptive_fence_timestamp_ns;
+	sample.window_id = psHead->ullWnd;
+	sample.pid = psHead->pid;
+	sample.frame_id = psKPI->i32QueueID;
+	sample.target_fps = psHead->target_fps;
+	sample.gpu_loading = psKPI->adaptive_gpu_loading;
+	sample.target_fps_valid = psHead->adaptive_target_fps_valid;
+	if (sample.target_fps_valid && sample.target_fps > 0) {
+		frame_period_ns = GED_KPI_SEC_DIVIDER / sample.target_fps;
+		sample.cpu_remained_ns = frame_period_ns - psKPI->t_cpu;
+		sample.gpu_remained_ns = frame_period_ns - psKPI->t_gpu;
+	}
+	sample.fence_valid = psKPI->adaptive_fence_valid;
+	sample.gpu_loading_valid = psKPI->adaptive_gpu_loading_valid;
+	sample.is_surfaceflinger = psHead->isSF;
+	sample.latest_frame = 1;
+	context->sample = sample;
+	context->sample_valid = 1;
+}
+
+/* ------------------------------------------------------------------- */
 static GED_BOOL ged_kpi_h_iterator_func(unsigned long ulID,
 	void *pvoid, void *pvParam)
 {
 	struct GED_KPI_HEAD *psHead = (struct GED_KPI_HEAD *)pvoid;
-	struct GED_TIMESTAMP *psTimeStamp = (struct GED_TIMESTAMP *)pvParam;
+	struct GED_KPI_H_ITERATOR_CONTEXT *context =
+		(struct GED_KPI_H_ITERATOR_CONTEXT *)pvParam;
+	struct GED_TIMESTAMP *psTimeStamp = context->timestamp;
 	struct GED_KPI *psKPI = NULL;
 	struct GED_KPI *psKPI_prev = NULL;
 
@@ -1067,6 +1156,8 @@ static GED_BOOL ged_kpi_h_iterator_func(unsigned long ulID,
 
 						psHead->last_TimeStampH =
 						psTimeStamp->ullTimeStamp;
+							ged_kpi_hybrid_adaptive_snapshot(
+								context, psHead, psKPI_prev);
 					}
 					break;
 				}
@@ -1093,6 +1184,8 @@ static GED_BOOL ged_kpi_h_iterator_func(unsigned long ulID,
 
 				psHead->last_TimeStampH =
 					psTimeStamp->ullTimeStamp;
+					ged_kpi_hybrid_adaptive_snapshot(
+						context, psHead, psKPI);
 			}
 		}
 	}
@@ -1397,23 +1490,39 @@ static void ged_kpi_work_cb(struct work_struct *psWork)
 			psKPI->pid = psTimeStamp->pid;
 			psKPI->ullWnd = psTimeStamp->ullWnd;
 			psKPI->i32QueueID = psTimeStamp->i32FrameID;
+			psKPI->adaptive_generation =
+				psTimeStamp->adaptive_generation;
+			psKPI->adaptive_queue_timestamp_ns =
+				psTimeStamp->adaptive_queue_timestamp_ns;
+			psKPI->adaptive_fence_valid = 0;
+			psKPI->adaptive_gpu_loading_valid = 0;
+			psKPI->adaptive_gpu_loading = 0;
 			psKPI->ulMask |= GED_TIMESTAMP_TYPE_1;
 			psKPI->ullTimeStamp1 = psTimeStamp->ullTimeStamp;
 			psKPI->i32QedBuffer_length =
 				psTimeStamp->i32QedBuffer_length;
 			psHead->i32QedBuffer_length =
 				psTimeStamp->i32QedBuffer_length;
+			psHead->adaptive_latest_frame_id =
+				psTimeStamp->i32FrameID;
+			psHead->adaptive_latest_generation =
+				psTimeStamp->adaptive_generation;
+			psHead->adaptive_latest_queue_timestamp_ns =
+				psTimeStamp->adaptive_queue_timestamp_ns;
 
 			/* section to query fps from FPS policy */
 #ifdef GED_KPI_DFRC
 			if (dfrc_get_frr_config(psKPI->pid, 0,
 				&d_target_fps, &mode, &client) == 0) {
-
-				if (d_target_fps != 0)
+				psHead->adaptive_target_fps_valid =
+					d_target_fps > 0 &&
+					d_target_fps <= GED_KPI_MAX_FPS;
+				if (psHead->adaptive_target_fps_valid) {
 					ged_kpi_update_TargetTimeAndTargetFps(
 						psHead, d_target_fps,
 						GED_KPI_DEFAULT_FPS_MARGIN, 0,
 						mode, client);
+					}
 #ifdef GED_KPI_DEBUG
 				GED_LOGE(
 					"[GED_KPI] psHead: %p, fps: %d, mode: %d, client: %d\n",
@@ -1594,6 +1703,19 @@ static void ged_kpi_work_cb(struct work_struct *psWork)
 			}
 
 			if (psKPI) {
+				psKPI->adaptive_fence_valid =
+					psTimeStamp->adaptive_fence_valid &&
+					psKPI->adaptive_generation ==
+						psTimeStamp->adaptive_generation &&
+					psKPI->adaptive_queue_timestamp_ns ==
+						psTimeStamp->adaptive_queue_timestamp_ns;
+				psKPI->adaptive_fence_timestamp_ns =
+					psTimeStamp->adaptive_timestamp_ns;
+				psKPI->adaptive_gpu_loading =
+					psTimeStamp->i32GPUloading;
+				psKPI->adaptive_gpu_loading_valid =
+					psKPI->adaptive_fence_valid &&
+					psTimeStamp->adaptive_gpu_loading_valid;
 				psKPI->ulMask |= GED_TIMESTAMP_TYPE_2;
 				psKPI->ullTimeStamp2 =
 					psTimeStamp->ullTimeStamp;
@@ -1940,9 +2062,15 @@ static void ged_kpi_work_cb(struct work_struct *psWork)
 				main_head->i32QedBuffer_length);
 		}
 		break;
-	case GED_TIMESTAMP_TYPE_H:
-		ged_hashtable_iterator(gs_hashtable, ged_kpi_h_iterator_func,
-			(void *)psTimeStamp);
+	case GED_TIMESTAMP_TYPE_H: {
+			struct GED_KPI_H_ITERATOR_CONTEXT context;
+
+			memset(&context, 0, sizeof(context));
+			context.timestamp = psTimeStamp;
+			ged_hashtable_iterator(gs_hashtable,
+				ged_kpi_h_iterator_func, &context);
+			if (context.sample_valid)
+				ged_hybrid_adaptive_sample(&context.sample);
 
 #ifdef GED_KPI_DEBUG
 		{
@@ -1960,20 +2088,25 @@ static void ged_kpi_work_cb(struct work_struct *psWork)
 		}
 #endif /* GED_KPI_DEBUG */
 		break;
+	}
 	case GED_SET_TARGET_FPS:
-
 		target_FPS = psTimeStamp->i32FrameID;
 		ulID = psTimeStamp->ullWnd;
 
 		psHead = (struct GED_KPI_HEAD *)ged_hashtable_find(gs_hashtable
 			, (unsigned long)ulID);
 		if (psHead) {
-			// parse fpsgo cpu time
-			ged_kpi_update_TargetTimeAndTargetFps(psHead,
-				target_FPS&0x000000ff,
-				(target_FPS&0x00000700) >> 8,
-				(target_FPS&0xfffff100) >> 11,
-				GED_KPI_FRC_DEFAULT_MODE, -1);
+			int target_fps = target_FPS & 0x000000ff;
+
+			psHead->adaptive_target_fps_valid =
+				target_fps > 0 &&
+				target_fps <= GED_KPI_MAX_FPS;
+			if (psHead->adaptive_target_fps_valid)
+				ged_kpi_update_TargetTimeAndTargetFps(psHead,
+					target_fps,
+					(target_FPS & 0x00000700) >> 8,
+					(target_FPS & 0xfffff100) >> 11,
+					GED_KPI_FRC_DEFAULT_MODE, -1);
 
 		}
 #ifdef GED_KPI_DEBUG
@@ -1989,7 +2122,7 @@ work_cb_end:
 	ged_free(psTimeStamp, sizeof(struct GED_TIMESTAMP));
 }
 /* ------------------------------------------------------------------- */
-static GED_ERROR ged_kpi_push_timestamp(
+static GED_ERROR ged_kpi_push_timestamp_ex(
 	GED_TIMESTAMP_TYPE eTimeStampType,
 	u64 ullTimeStamp,
 	int pid,
@@ -1997,9 +2130,13 @@ static GED_ERROR ged_kpi_push_timestamp(
 	int i32FrameID,
 	int QedBuffer_length,
 	int isSF,
-	void *fence_addr)
+	void *fence_addr,
+	u64 adaptive_generation,
+	u64 adaptive_queue_timestamp_ns,
+	int adaptive_fence_valid)
 {
 	static int event_QedBuffer_cnt, event_3d_fence_cnt, event_hw_vsync;
+	int adaptive_gpu_loading_valid = 0;
 #ifdef GED_ENABLE_FB_DVFS
 	unsigned long ui32IRQFlags;
 #endif /* GED_ENABLE_FB_DVFS */
@@ -2017,6 +2154,13 @@ static GED_ERROR ged_kpi_push_timestamp(
 				__func__);
 			return GED_ERROR_OOM;
 		}
+		psTimeStamp->adaptive_generation = adaptive_generation;
+		psTimeStamp->adaptive_queue_timestamp_ns =
+			adaptive_queue_timestamp_ns;
+		psTimeStamp->adaptive_timestamp_ns = ktime_get_ns();
+		psTimeStamp->adaptive_fence_valid = adaptive_fence_valid;
+		psTimeStamp->adaptive_gpu_loading_valid = 0;
+		psTimeStamp->i32GPUloading = 0;
 
 		if (eTimeStampType == GED_TIMESTAMP_TYPE_2) {
 #ifdef GED_ENABLE_FB_DVFS
@@ -2028,11 +2172,13 @@ static GED_ERROR ged_kpi_push_timestamp(
 #endif /* GED_ENABLE_DVFS_LOADING_MODE */
 				ged_kpi_trigger_fb_dvfs();
 #ifdef GED_ENABLE_DVFS_LOADING_MODE
-				ged_dvfs_cal_gpu_utilization_ex(
+					adaptive_gpu_loading_valid =
+					ged_dvfs_cal_gpu_utilization_ex(
 					&(psTimeStamp->i32GPUloading),
 					&pui32Block, &pui32Idle, &util_ex);
 #else
-				ged_dvfs_cal_gpu_utilization(
+					adaptive_gpu_loading_valid =
+					ged_dvfs_cal_gpu_utilization(
 					&(psTimeStamp->i32GPUloading),
 					&pui32Block, &pui32Idle);
 #endif /* GED_ENABLE_DVFS_LOADING_MODE */
@@ -2043,6 +2189,8 @@ static GED_ERROR ged_kpi_push_timestamp(
 #else
 			psTimeStamp->i32GPUloading = 0;
 #endif /* GED_ENABLE_FB_DVFS */
+				psTimeStamp->adaptive_gpu_loading_valid =
+					adaptive_gpu_loading_valid;
 		}
 
 		psTimeStamp->eTimeStampType = eTimeStampType;
@@ -2097,6 +2245,21 @@ static GED_ERROR ged_kpi_push_timestamp(
 #endif /* GED_KPI_DEBUG */
 	return GED_OK;
 }
+
+static GED_ERROR ged_kpi_push_timestamp(
+	GED_TIMESTAMP_TYPE eTimeStampType,
+	u64 ullTimeStamp,
+	int pid,
+	unsigned long long ullWnd,
+	int i32FrameID,
+	int QedBuffer_length,
+	int isSF,
+	void *fence_addr)
+{
+	return ged_kpi_push_timestamp_ex(eTimeStampType, ullTimeStamp, pid,
+		ullWnd, i32FrameID, QedBuffer_length, isSF, fence_addr,
+		0, 0, 0);
+}
 /* ------------------------------------------------------------------- */
 static GED_ERROR ged_kpi_timeD(int pid, u64 ullWdnd, int i32FrameID, int isSF)
 {
@@ -2104,17 +2267,22 @@ static GED_ERROR ged_kpi_timeD(int pid, u64 ullWdnd, int i32FrameID, int isSF)
 		ullWdnd, i32FrameID, -1, isSF, NULL);
 }
 /* ------------------------------------------------------------------- */
-static GED_ERROR ged_kpi_time1(int pid, u64 ullWdnd, int i32FrameID
-		, int QedBuffer_length, void *fence_addr)
+static GED_ERROR ged_kpi_time1(int pid, u64 ullWdnd, int i32FrameID,
+		int QedBuffer_length, void *fence_addr,
+		u64 adaptive_generation, u64 adaptive_queue_timestamp_ns)
 {
-	return ged_kpi_push_timestamp(GED_TIMESTAMP_TYPE_1, ged_get_time(), pid,
-		ullWdnd, i32FrameID, QedBuffer_length, 0, fence_addr);
+	return ged_kpi_push_timestamp_ex(GED_TIMESTAMP_TYPE_1, ged_get_time(),
+		pid, ullWdnd, i32FrameID, QedBuffer_length, 0, fence_addr,
+		adaptive_generation, adaptive_queue_timestamp_ns, 0);
 }
 /* ------------------------------------------------------------------- */
-static GED_ERROR ged_kpi_time2(int pid, u64 ullWdnd, int i32FrameID)
+static GED_ERROR ged_kpi_time2(int pid, u64 ullWdnd, int i32FrameID,
+		u64 adaptive_generation, u64 adaptive_queue_timestamp_ns,
+		int fence_valid)
 {
-	return ged_kpi_push_timestamp(GED_TIMESTAMP_TYPE_2, ged_get_time(), pid,
-		ullWdnd, i32FrameID, -1, -1, NULL);
+	return ged_kpi_push_timestamp_ex(GED_TIMESTAMP_TYPE_2, ged_get_time(),
+		pid, ullWdnd, i32FrameID, -1, -1, NULL, adaptive_generation,
+		adaptive_queue_timestamp_ns, fence_valid);
 }
 /* ------------------------------------------------------------------- */
 static GED_ERROR ged_kpi_timeP(int pid, u64 ullWdnd, int i32FrameID)
@@ -2171,7 +2339,8 @@ void ged_kpi_gpu_3d_fence_sync_cb(struct dma_fence *sFence,
 	GED_CONTAINER_OF(waiter, struct GED_KPI_GPU_TS, sSyncWaiter);
 
 	ged_kpi_time2(psMonitor->pid, psMonitor->ullWdnd,
-		psMonitor->i32FrameID);
+			psMonitor->i32FrameID, psMonitor->adaptive_generation,
+			psMonitor->adaptive_queue_timestamp_ns, 1);
 
 	INIT_WORK(&psMonitor->sWork, ged_kpi_fence_put_cb);
 	queue_work(g_FenceWorkQueue, &psMonitor->sWork);
@@ -2249,13 +2418,18 @@ GED_ERROR ged_kpi_queue_buffer_ts(int pid, u64 ullWdnd, int i32FrameID,
 {
 #ifdef MTK_GED_KPI
 	int ret;
+	u64 adaptive_generation;
+	u64 adaptive_queue_timestamp_ns;
 	struct GED_KPI_GPU_TS *psMonitor;
 	struct dma_fence *psSyncFence;
 
+	adaptive_generation = ged_hybrid_adaptive_generation();
+	adaptive_queue_timestamp_ns = ktime_get_ns();
 	psSyncFence = sync_file_get_fence(fence_fd);
 
 	ret = ged_kpi_time1(pid, ullWdnd, i32FrameID, QedBuffer_length,
-		(void *)psSyncFence);
+		(void *)psSyncFence, adaptive_generation,
+		adaptive_queue_timestamp_ns);
 
 	if (ret != GED_OK)
 		return ret;
@@ -2273,10 +2447,14 @@ GED_ERROR ged_kpi_queue_buffer_ts(int pid, u64 ullWdnd, int i32FrameID,
 	psMonitor->pid = pid;
 	psMonitor->ullWdnd = ullWdnd;
 	psMonitor->i32FrameID = i32FrameID;
+	psMonitor->adaptive_generation = adaptive_generation;
+	psMonitor->adaptive_queue_timestamp_ns =
+		adaptive_queue_timestamp_ns;
 
 	if (psMonitor->psSyncFence == NULL) {
 		ged_free(psMonitor, sizeof(struct GED_KPI_GPU_TS));
-		ret = ged_kpi_time2(pid, ullWdnd, i32FrameID);
+		ret = ged_kpi_time2(pid, ullWdnd, i32FrameID,
+			adaptive_generation, adaptive_queue_timestamp_ns, 0);
 	} else {
 
 		ret = dma_fence_add_callback(psMonitor->psSyncFence
@@ -2286,7 +2464,8 @@ GED_ERROR ged_kpi_queue_buffer_ts(int pid, u64 ullWdnd, int i32FrameID,
 		if (ret < 0) {
 			dma_fence_put(psMonitor->psSyncFence);
 			ged_free(psMonitor, sizeof(struct GED_KPI_GPU_TS));
-			ret = ged_kpi_time2(pid, ullWdnd, i32FrameID);
+			ret = ged_kpi_time2(pid, ullWdnd, i32FrameID,
+				adaptive_generation, adaptive_queue_timestamp_ns, 0);
 		}
 	}
 	return ret;

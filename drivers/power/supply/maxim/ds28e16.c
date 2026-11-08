@@ -30,7 +30,6 @@
 #include <linux/gpio/consumer.h>
 #include <linux/regmap.h>
 #include <linux/random.h>
-#include <linux/sched.h>
 
 #define ds_info	pr_info
 #define ds_dbg	pr_debug
@@ -278,36 +277,6 @@ unsigned char mi_counter[16] = {0x00};
 int mi_auth_result = 0x00;
 
 static bool flag_battery_verify_process = false;
-
-static void set_sched_affinity_to_current(void)
-{
-    long ret;
-    int current_cpu;
-
-    preempt_disable();
-    current_cpu = smp_processor_id();
-    ret = sched_setaffinity(CURRENT_DS28E16_TASK, cpumask_of(current_cpu));
-    preempt_enable();
-    if(ret) {
-        pr_info("Setting cpu affinity to current cpu failed(%ld) in %s.\n", ret, __func__);
-    } else {
-        pr_info("Setting cpu affinity to current cpu(%d) in %s.\n", current_cpu, __func__);
-    }
-}
-
-static void set_sched_affinity_to_all(void)
-{
-    long ret;
-    cpumask_t dstp;
-
-    cpumask_setall(&dstp);
-    ret = sched_setaffinity(CURRENT_DS28E16_TASK, &dstp);
-    if(ret) {
-        pr_info("Setting cpu affinity to all valid cpus failed(%ld) in %s.\n", ret, __func__);
-    } else {
-        pr_info("Setting cpu affinity to all valid cpus in %s.\n", __func__);
-    }
-}
 
 unsigned char crc_low_first(unsigned char *ptr, unsigned char len)
 {
@@ -1236,7 +1205,6 @@ static int ds28el16_Read_RomID_retry(unsigned char *RomID)
 	int i;
 //	unsigned char data[50];
 
-	set_sched_affinity_to_current();
 
 	for(i=0; (i< 5)&&((mi_romid[0]==0x1f)||(mi_romid[0]==0x00));i++)                //2021_12_1 Update
 	{
@@ -1251,12 +1219,10 @@ static int ds28el16_Read_RomID_retry(unsigned char *RomID)
 		ds_info("read rom id communication start %d...\n", i);                  //2022/4/16
 		if (Read_RomID(RomID) == DS_TRUE)
 		{
-			set_sched_affinity_to_all();
 			return DS_TRUE;
 		}
 	}
 
-	set_sched_affinity_to_all();
 	return DS_FALSE;
 }
 
@@ -1264,16 +1230,13 @@ static int ds28el16_get_page_status_retry(unsigned char *data)
 {
 	int i;
 
-	set_sched_affinity_to_current();
 	for (i = 0; i < GET_BLOCK_STATUS_RETRY; i++) {
 		ds_info("read page status communication start... %d\n", i);
 
 		if (DS28E16_cmd_readStatus(data) == DS_TRUE) {
-			set_sched_affinity_to_all();
 			return DS_TRUE;
 		}
 	}
-	set_sched_affinity_to_all();
 
 	return DS_FALSE;
 }
@@ -1302,12 +1265,10 @@ static int ds28el16_get_page_data_retry(int page, unsigned char *data)
 	if (page >= MAX_PAGENUM)
 		return DS_FALSE;
 */
-	set_sched_affinity_to_current();
 	for (i = 0; i < GET_USER_MEMORY_RETRY; i++) {
 		ds_info("read page data communication start... %d\n", i);
 
 		if (DS28E16_cmd_readMemory(page, data) == DS_TRUE) {
-			set_sched_affinity_to_all();
 			ds_dbg("page number is %d\n", page);
 			ds_dbg("page data:\n");
 			ds_dbg("%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
@@ -1333,7 +1294,6 @@ static int ds28el16_get_page_data_retry(int page, unsigned char *data)
 			return DS_TRUE;
 		}
 	}
-	set_sched_affinity_to_all();
 
 	return DS_FALSE;
 }
@@ -1385,19 +1345,16 @@ static int ds28el16_do_authentication(struct ds28e16_data *data)
 		return result;
 	}
 
-	set_sched_affinity_to_current();
 	for (i = 0; i < GET_VERIFY_RETRY; i++) {
 		result = AuthenticateDS28E16(auth_ANON, auth_BDCONST, 0,
 			pagenumber, challenge, session_seed, S_secret);
 		Delay_us(100);      //delay 100us for wait next cmd flow 2022_4_22 updated
 		if (result == DS_TRUE) {
 			data->batt_verified = 1;
-			set_sched_affinity_to_all();
 			ds_log("%s battery verify ok[%d]", __func__, result);
 			return result;
 		}
 	}
-	set_sched_affinity_to_all();
 
 	if (result != DS_TRUE) {
 		data->batt_verified = 0;

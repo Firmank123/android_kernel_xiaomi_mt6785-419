@@ -647,9 +647,11 @@ static int mt_usb_get_property(struct power_supply *psy,
 	enum power_supply_property psp, union power_supply_propval *val)
 {
 	struct mt_charger *mtk_chg = power_supply_get_drvdata(psy);
+	struct power_supply *identify_psy;
 	union power_supply_propval pval = {0,};
 	int input_suspend = 0;
 	int pd_online = 0;
+	int ret;
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_ONLINE:
@@ -734,17 +736,12 @@ static int mt_usb_get_property(struct power_supply *psy,
 			val->intval = fake_temp;
 		break;
 	case POWER_SUPPLY_PROP_VBUS_DISABLE:
-		if (!mtk_chg->charger_identify_psy) {
-			mtk_chg->charger_identify_psy = power_supply_get_by_name("Charger_Identify");
-			if (!mtk_chg->charger_identify_psy)
-				chr_err("%s: get power supply failed\n", __func__);
-			val->intval = 0;
-		} else {
-			power_supply_get_property(mtk_chg->charger_identify_psy,
-				POWER_SUPPLY_PROP_VBUS_DISABLE, &pval);
-			val->intval = pval.intval;
-		}
-		break;
+		identify_psy = power_supply_get_by_name("Charger_Identify");
+		if (!identify_psy)
+			return -ENODEV;
+		ret = power_supply_get_property(identify_psy, psp, val);
+		power_supply_put(identify_psy);
+		return ret;
 #ifdef CONFIG_BQ2597X_CHARGE_PUMP
 	case POWER_SUPPLY_PROP_PD_TYPE:
 		if (mtk_chg->cti->typec_mode == POWER_SUPPLY_TYPEC_NONE)
@@ -787,6 +784,8 @@ static int mt_usb_set_property(struct power_supply *psy,
 	enum power_supply_property psp, const union power_supply_propval *val)
 {
 	struct mt_charger *mtk_chg = power_supply_get_drvdata(psy);
+	struct power_supply *identify_psy;
+	int ret;
 	int rc;
 
 	if (!mtk_chg) {
@@ -796,15 +795,12 @@ static int mt_usb_set_property(struct power_supply *psy,
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_VBUS_DISABLE:
-		if (!mtk_chg->charger_identify_psy) {
-			mtk_chg->charger_identify_psy = power_supply_get_by_name("charger_identify");
-			if (!mtk_chg->charger_identify_psy)
-				chr_err("%s: get power supply failed\n", __func__);
-		} else {
-			power_supply_set_property(mtk_chg->charger_identify_psy,
-				POWER_SUPPLY_PROP_VBUS_DISABLE, val);
-		}
-		break;
+		identify_psy = power_supply_get_by_name("Charger_Identify");
+		if (!identify_psy)
+			return -ENODEV;
+		ret = power_supply_set_property(identify_psy, psp, val);
+		power_supply_put(identify_psy);
+		return ret;
 	case POWER_SUPPLY_PROP_CONNECTOR_TEMP:
 		fake_temp = val->intval;
 		break;

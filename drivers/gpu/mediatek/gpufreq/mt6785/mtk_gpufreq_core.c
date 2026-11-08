@@ -113,7 +113,7 @@ static void __mt_gpufreq_update_max_limited_idx(void);
 static unsigned int __mt_gpufreq_calculate_dds(
 		unsigned int freq_khz,
 		enum g_posdiv_power_enum posdiv_power);
-static void __mt_gpufreq_setup_opp_power_table(int num);
+static int __mt_gpufreq_setup_opp_power_table(int num);
 static void __mt_gpufreq_cal_sb_opp_index(void);
 
 /**
@@ -2999,17 +2999,23 @@ static void __mt_gpufreq_kick_pbm(int enable)
 /*
  * (default) OPP table initialization
  */
-static void __mt_gpufreq_setup_opp_table(
+static int __mt_gpufreq_setup_opp_table(
 		struct g_opp_table_info *freqs,
 		int num)
 {
 	unsigned int i = 0;
+	int ret;
 
 	g_opp_table = kzalloc((num) * sizeof(*freqs), GFP_KERNEL);
-	g_opp_table_default = kzalloc((num) * sizeof(*freqs), GFP_KERNEL);
+	if (g_opp_table == NULL)
+		return -ENOMEM;
 
-	if (g_opp_table == NULL || g_opp_table_default == NULL)
-		return;
+	g_opp_table_default = kzalloc((num) * sizeof(*freqs), GFP_KERNEL);
+	if (g_opp_table_default == NULL) {
+		kfree(g_opp_table);
+		g_opp_table = NULL;
+		return -ENOMEM;
+	}
 
 	for (i = 0; i < num; i++) {
 		g_opp_table[i].gpufreq_khz = freqs[i].gpufreq_khz;
@@ -3058,23 +3064,36 @@ static void __mt_gpufreq_setup_opp_table(
 			g_segment_min_opp_idx);
 
 	__mt_gpufreq_cal_sb_opp_index();
-	__mt_gpufreq_setup_opp_power_table(num);
+	ret = __mt_gpufreq_setup_opp_power_table(num);
+	if (ret) {
+		kfree(g_opp_table_default);
+		g_opp_table_default = NULL;
+		kfree(g_opp_table);
+		g_opp_table = NULL;
+		g_max_opp_idx_num = 0;
+		return ret;
+	}
+
+	return 0;
 }
 
 /*
  * OPP power table initialization
  */
-static void __mt_gpufreq_setup_opp_power_table(int num)
+static int __mt_gpufreq_setup_opp_power_table(int num)
 {
 	int i = 0;
 	int temp = 0;
+#ifdef CONFIG_THERMAL
+	int ret;
+#endif
 
 	g_power_table = kzalloc(
 			(num) * sizeof(struct mt_gpufreq_power_table_info),
 			GFP_KERNEL);
 
 	if (g_power_table == NULL)
-		return;
+		return -ENOMEM;
 
 #ifdef CONFIG_THERMAL
 	temp = get_immediate_gpu_wrap() / 1000;
@@ -3111,8 +3130,19 @@ static void __mt_gpufreq_setup_opp_power_table(int num)
 	}
 
 #ifdef CONFIG_THERMAL
-	mtk_gpufreq_register(g_power_table, num);
+	ret = mtk_gpufreq_register(g_power_table, num);
+	if (ret) {
+		gpufreq_pr_err(
+				"@%s: failed to register gpufreq to thermal: %d\n",
+				__func__,
+				ret);
+		kfree(g_power_table);
+		g_power_table = NULL;
+		return ret;
+	}
 #endif
+
+	return 0;
 }
 
 /*
@@ -3179,6 +3209,8 @@ static void __mt_gpufreq_set_initial(void)
 
 static int __mt_gpufreq_init_pmic(struct platform_device *pdev)
 {
+	int ret;
+
 	g_pmic = kzalloc(sizeof(struct g_pmic_info), GFP_KERNEL);
 
 	if (g_pmic == NULL)
@@ -3187,19 +3219,21 @@ static int __mt_gpufreq_init_pmic(struct platform_device *pdev)
 	/* VGPU is MT6359's VGPU11 buck */
 	g_pmic->reg_vgpu = regulator_get(&pdev->dev, "vgpu11");
 	if (IS_ERR(g_pmic->reg_vgpu)) {
+		ret = PTR_ERR(g_pmic->reg_vgpu);
 		gpufreq_pr_err(
-				"@%s: cannot get VGPU\n",
-				__func__);
-		return PTR_ERR(g_pmic->reg_vgpu);
+				"@%s: cannot get VGPU: %d\n",
+				__func__, ret);
+		goto err_vgpu;
 	}
 
 	/* VSRAM_GPU is MT6359's VPU buck */
 	g_pmic->reg_vsram_gpu = regulator_get(&pdev->dev, "vpu");
 	if (IS_ERR(g_pmic->reg_vsram_gpu)) {
+		ret = PTR_ERR(g_pmic->reg_vsram_gpu);
 		gpufreq_pr_err(
-				"@%s: cannot get VSRAM_GPU\n",
-				__func__);
-		return PTR_ERR(g_pmic->reg_vsram_gpu);
+				"@%s: cannot get VSRAM_GPU: %d\n",
+				__func__, ret);
+		goto err_vsram;
 	}
 
 	/* setup PMIC init value */
@@ -3209,25 +3243,41 @@ static int __mt_gpufreq_init_pmic(struct platform_device *pdev)
 	g_vsram_sfchg_frate = __calculate_vsram_sfchg_rate(false);
 
 	/* set VSRAM_GPU */
-	regulator_set_voltage(
+	ret = regulator_set_voltage(
 			g_pmic->reg_vsram_gpu,
 			VSRAM_GPU_MAX_VOLT * 10,
 			VSRAM_GPU_MAX_VOLT * 10 + 125);
+	if (ret)
+		gpufreq_pr_err(
+				"@%s: set VSRAM_GPU voltage failed: %d\n",
+				__func__, ret);
+
 	/* set VGPU */
-	regulator_set_voltage(
+	ret = regulator_set_voltage(
 			g_pmic->reg_vgpu,
 			VGPU_MAX_VOLT * 10,
 			VGPU_MAX_VOLT * 10 + 125);
+	if (ret)
+		gpufreq_pr_err(
+				"@%s: set VGPU voltage failed: %d\n",
+				__func__, ret);
 
 	/* enable bucks enforcement for correct reference counts */
-	if (regulator_enable(g_pmic->reg_vsram_gpu))
+	ret = regulator_enable(g_pmic->reg_vsram_gpu);
+	if (ret) {
 		gpufreq_pr_err(
-				"@%s: enable VSRAM_GPU failed\n",
-				__func__);
-	if (regulator_enable(g_pmic->reg_vgpu))
+				"@%s: enable VSRAM_GPU failed: %d\n",
+				__func__, ret);
+		goto err_enable_vsram;
+	}
+
+	ret = regulator_enable(g_pmic->reg_vgpu);
+	if (ret) {
 		gpufreq_pr_err(
-				"@%s: enable VGPU failed\n",
-				__func__);
+				"@%s: enable VGPU failed: %d\n",
+				__func__, ret);
+		goto err_enable_vgpu;
+	}
 
 	g_buck_on = true;
 
@@ -3251,101 +3301,126 @@ static int __mt_gpufreq_init_pmic(struct platform_device *pdev)
 			(regulator_get_voltage(g_pmic->reg_vsram_gpu) / 1000));
 
 	return 0;
+
+err_enable_vgpu:
+	regulator_disable(g_pmic->reg_vsram_gpu);
+err_enable_vsram:
+	regulator_put(g_pmic->reg_vsram_gpu);
+err_vsram:
+	regulator_put(g_pmic->reg_vgpu);
+err_vgpu:
+	kfree(g_pmic);
+	g_pmic = NULL;
+	return ret;
 }
 
 static int __mt_gpufreq_init_clk(struct platform_device *pdev)
 {
+	int ret;
+
 	/* MFGPLL is from APMIXED and its parent clock is from XTAL(26MHz); */
 	g_apmixed_base = __mt_gpufreq_of_ioremap("mediatek,apmixed", 0);
 	if (!g_apmixed_base) {
 		gpufreq_pr_err(
-				"@%s: ioremap failed at APMIXED",
+				"@%s: ioremap failed at APMIXED\n",
 				__func__);
 		return -ENOENT;
 	}
 
 	g_clk = kzalloc(sizeof(struct g_clk_info), GFP_KERNEL);
-	if (g_clk == NULL)
-		return -ENOMEM;
+	if (g_clk == NULL) {
+		ret = -ENOMEM;
+		goto err_alloc_clk;
+	}
 
 	g_clk->clk_mux = devm_clk_get(&pdev->dev, "clk_mux");
 	if (IS_ERR(g_clk->clk_mux)) {
+		ret = PTR_ERR(g_clk->clk_mux);
 		gpufreq_pr_err(
-				"@%s: cannot get clk_mux\n",
-				__func__);
-		return PTR_ERR(g_clk->clk_mux);
+				"@%s: cannot get clk_mux: %d\n",
+				__func__, ret);
+		goto err_clk;
 	}
 
 	g_clk->clk_main_parent = devm_clk_get(&pdev->dev, "clk_main_parent");
 	if (IS_ERR(g_clk->clk_main_parent)) {
+		ret = PTR_ERR(g_clk->clk_main_parent);
 		gpufreq_pr_err(
-				"@%s: cannot get clk_main_parent\n",
-				__func__);
-		return PTR_ERR(g_clk->clk_main_parent);
+				"@%s: cannot get clk_main_parent: %d\n",
+				__func__, ret);
+		goto err_clk;
 	}
 
 	g_clk->clk_sub_parent = devm_clk_get(&pdev->dev, "clk_sub_parent");
 	if (IS_ERR(g_clk->clk_sub_parent)) {
+		ret = PTR_ERR(g_clk->clk_sub_parent);
 		gpufreq_pr_err(
-				"@%s: cannot get clk_sub_parent\n",
-				__func__);
-		return PTR_ERR(g_clk->clk_sub_parent);
+				"@%s: cannot get clk_sub_parent: %d\n",
+				__func__, ret);
+		goto err_clk;
 	}
 
 	g_clk->subsys_mfg_cg = devm_clk_get(&pdev->dev, "subsys_mfg_cg");
 	if (IS_ERR(g_clk->subsys_mfg_cg)) {
+		ret = PTR_ERR(g_clk->subsys_mfg_cg);
 		gpufreq_pr_err(
-				"@%s: cannot get subsys_mfg_cg\n",
-				__func__);
-		return PTR_ERR(g_clk->subsys_mfg_cg);
+				"@%s: cannot get subsys_mfg_cg: %d\n",
+				__func__, ret);
+		goto err_clk;
 	}
 
 	g_clk->mtcmos_mfg_async = devm_clk_get(&pdev->dev, "mtcmos_mfg_async");
 	if (IS_ERR(g_clk->mtcmos_mfg_async)) {
+		ret = PTR_ERR(g_clk->mtcmos_mfg_async);
 		gpufreq_pr_err(
-				"@%s: cannot get mtcmos_mfg_async\n",
-				__func__);
-		return PTR_ERR(g_clk->mtcmos_mfg_async);
+				"@%s: cannot get mtcmos_mfg_async: %d\n",
+				__func__, ret);
+		goto err_clk;
 	}
 
 	g_clk->mtcmos_mfg = devm_clk_get(&pdev->dev, "mtcmos_mfg");
 	if (IS_ERR(g_clk->mtcmos_mfg)) {
+		ret = PTR_ERR(g_clk->mtcmos_mfg);
 		gpufreq_pr_err(
-				"@%s: cannot get mtcmos_mfg\n",
-				__func__);
-		return PTR_ERR(g_clk->mtcmos_mfg);
+				"@%s: cannot get mtcmos_mfg: %d\n",
+				__func__, ret);
+		goto err_clk;
 	}
 
 	g_clk->mtcmos_mfg_core0 = devm_clk_get(&pdev->dev, "mtcmos_mfg_core0");
 	if (IS_ERR(g_clk->mtcmos_mfg_core0)) {
+		ret = PTR_ERR(g_clk->mtcmos_mfg_core0);
 		gpufreq_pr_err(
-				"@%s: cannot get mtcmos_mfg_core0\n",
-				__func__);
-		return PTR_ERR(g_clk->mtcmos_mfg_core0);
+				"@%s: cannot get mtcmos_mfg_core0: %d\n",
+				__func__, ret);
+		goto err_clk;
 	}
 
 	g_clk->mtcmos_mfg_core1 = devm_clk_get(&pdev->dev, "mtcmos_mfg_core1");
 	if (IS_ERR(g_clk->mtcmos_mfg_core1)) {
+		ret = PTR_ERR(g_clk->mtcmos_mfg_core1);
 		gpufreq_pr_err(
-				"@%s: cannot get mtcmos_mfg_core1\n",
-				__func__);
-		return PTR_ERR(g_clk->mtcmos_mfg_core1);
+				"@%s: cannot get mtcmos_mfg_core1: %d\n",
+				__func__, ret);
+		goto err_clk;
 	}
 
 	g_clk->mtcmos_mfg_core2 = devm_clk_get(&pdev->dev, "mtcmos_mfg_core2");
 	if (IS_ERR(g_clk->mtcmos_mfg_core2)) {
+		ret = PTR_ERR(g_clk->mtcmos_mfg_core2);
 		gpufreq_pr_err(
-				"@%s: cannot get mtcmos_mfg_core2\n",
-				__func__);
-		return PTR_ERR(g_clk->mtcmos_mfg_core2);
+				"@%s: cannot get mtcmos_mfg_core2: %d\n",
+				__func__, ret);
+		goto err_clk;
 	}
 
 	g_clk->mtcmos_mfg_core3 = devm_clk_get(&pdev->dev, "mtcmos_mfg_core3");
 	if (IS_ERR(g_clk->mtcmos_mfg_core3)) {
+		ret = PTR_ERR(g_clk->mtcmos_mfg_core3);
 		gpufreq_pr_err(
-				"@%s: cannot get mtcmos_mfg_core3\n",
-				__func__);
-		return PTR_ERR(g_clk->mtcmos_mfg_core3);
+				"@%s: cannot get mtcmos_mfg_core3: %d\n",
+				__func__, ret);
+		goto err_clk;
 	}
 
 	gpufreq_pr_info(
@@ -3362,6 +3437,14 @@ static int __mt_gpufreq_init_clk(struct platform_device *pdev)
 			g_clk->mtcmos_mfg_core2, g_clk->mtcmos_mfg_core3);
 
 	return 0;
+
+err_clk:
+	kfree(g_clk);
+	g_clk = NULL;
+err_alloc_clk:
+	iounmap(g_apmixed_base);
+	g_apmixed_base = NULL;
+	return ret;
 }
 
 static void __mt_gpufreq_init_efuse(struct platform_device *pdev)
@@ -3495,15 +3578,17 @@ static int __mt_gpufreq_pdrv_probe(struct platform_device *pdev)
 	/* init clock source and mtcmos */
 	ret = __mt_gpufreq_init_clk(pdev);
 	if (ret)
-		return ret;
+		goto err_init_clk;
 
 	/* check efuse_id and set the corresponding segment_id */
-    __mt_gpufreq_init_efuse(pdev);
+	__mt_gpufreq_init_efuse(pdev);
 
 	/* init opp table */
-	__mt_gpufreq_setup_opp_table(
+	ret = __mt_gpufreq_setup_opp_table(
 			g_opp_table_segment,
 			ARRAY_SIZE(g_opp_table_segment));
+	if (ret)
+		goto err_setup_opp;
 
 	/* setup initial frequency */
 	__mt_gpufreq_set_initial();
@@ -3530,6 +3615,24 @@ static int __mt_gpufreq_pdrv_probe(struct platform_device *pdev)
 	__mt_gpufreq_init_others();
 
 	return 0;
+
+err_setup_opp:
+	kfree(g_clk);
+	g_clk = NULL;
+	iounmap(g_apmixed_base);
+	g_apmixed_base = NULL;
+err_init_clk:
+	if (g_buck_on) {
+		regulator_disable(g_pmic->reg_vgpu);
+		regulator_disable(g_pmic->reg_vsram_gpu);
+		g_buck_on = false;
+	}
+	regulator_put(g_pmic->reg_vsram_gpu);
+	regulator_put(g_pmic->reg_vgpu);
+	kfree(g_pmic);
+	g_pmic = NULL;
+
+	return ret;
 }
 
 /*

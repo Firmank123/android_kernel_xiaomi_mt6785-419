@@ -49,14 +49,16 @@ void mt_ppm_set_dvfs_table(unsigned int cpu,
 	FUNC_EXIT(FUNC_LV_API);
 }
 
-void mt_ppm_register_client(enum ppm_client client,
+int mt_ppm_register_client(enum ppm_client client,
 	void (*limit)(struct ppm_client_req req))
 {
+	int ret = 0;
+
 	FUNC_ENTER(FUNC_LV_API);
 
-	if (client < 0) {
+	if (client < 0 || client >= NR_PPM_CLIENTS) {
 		ppm_err("invalid client value: %d\n", client);
-		return;
+		return -EINVAL;
 	}
 
 	ppm_lock(&ppm_main_info.lock);
@@ -66,7 +68,7 @@ void mt_ppm_register_client(enum ppm_client client,
 	case PPM_CLIENT_DVFS:
 		ppm_main_info.client_info[client].name = "DVFS";
 		/* Replace DVFS callback fun with qos*/
-		ppm_init_qos_request();
+		ret = ppm_init_qos_request();
 		break;
 	case PPM_CLIENT_HOTPLUG:
 		ppm_main_info.client_info[client].name = "HOTPLUG";
@@ -75,8 +77,37 @@ void mt_ppm_register_client(enum ppm_client client,
 		ppm_main_info.client_info[client].name = "UNKNOWN";
 		break;
 	}
-	ppm_main_info.client_info[client].client = client;
-	ppm_main_info.client_info[client].limit_cb = limit;
+
+	if (!ret) {
+		ppm_main_info.client_info[client].client = client;
+		ppm_main_info.client_info[client].limit_cb = limit;
+	} else {
+		ppm_main_info.client_info[client].name = NULL;
+	}
+
+	ppm_unlock(&ppm_main_info.lock);
+
+	FUNC_EXIT(FUNC_LV_API);
+
+	return ret;
+}
+
+void mt_ppm_unregister_client(enum ppm_client client)
+{
+	FUNC_ENTER(FUNC_LV_API);
+
+	if (client < 0 || client >= NR_PPM_CLIENTS) {
+		ppm_err("invalid client value: %d\n", client);
+		return;
+	}
+
+	ppm_lock(&ppm_main_info.lock);
+
+	if (client == PPM_CLIENT_DVFS)
+		ppm_deinit_qos_request();
+
+	ppm_main_info.client_info[client].limit_cb = NULL;
+	ppm_main_info.client_info[client].name = NULL;
 
 	ppm_unlock(&ppm_main_info.lock);
 

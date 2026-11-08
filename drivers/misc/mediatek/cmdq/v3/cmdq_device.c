@@ -457,8 +457,9 @@ void cmdq_dev_init_device_tree(struct device_node *node)
 	gMMSYSDummyRegOffset = 0;
 	cmdq_core_init_dts_data();
 	status = of_property_read_u32(node, "thread_count", &thread_count);
-	if (status >= 0)
-		gThreadCount = thread_count;
+	/* Keep the DT count within the core and MDP thread arrays. */
+	if (!status && thread_count)
+		gThreadCount = min_t(u32, thread_count, CMDQ_MAX_THREAD_COUNT);
 	/* init GCE subsys */
 	cmdq_dev_init_subsys(node);
 	/* init event table */

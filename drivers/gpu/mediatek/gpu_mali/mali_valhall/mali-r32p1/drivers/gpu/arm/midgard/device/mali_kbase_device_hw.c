@@ -220,6 +220,17 @@ void kbase_clean_caches_done(struct kbase_device *kbdev)
 
 	spin_lock_irqsave(&kbdev->hwaccess_lock, flags);
 
+	/* A synchronous flush may have consumed this IRQ while we waited. */
+	if (!kbdev->cache_clean_in_progress ||
+	    !(kbase_reg_read(kbdev, GPU_CONTROL_REG(GPU_IRQ_RAWSTAT)) &
+	      CLEAN_CACHES_COMPLETED))
+		goto unlock;
+
+	KBASE_KTRACE_ADD(kbdev, CORE_GPU_IRQ_CLEAR, NULL,
+			 CLEAN_CACHES_COMPLETED);
+	kbase_reg_write(kbdev, GPU_CONTROL_REG(GPU_IRQ_CLEAR),
+			CLEAN_CACHES_COMPLETED);
+
 	if (kbdev->cache_clean_queued) {
 		u32 pended_flush_op = kbdev->cache_clean_queued;
 
@@ -238,6 +249,7 @@ void kbase_clean_caches_done(struct kbase_device *kbdev)
 		kbase_gpu_cache_clean_wait_complete(kbdev);
 	}
 
+unlock:
 	spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
 }
 

@@ -11,8 +11,14 @@
 #include <linux/sched.h>
 #include <linux/mutex.h>
 #include <linux/slab.h>
+#include <linux/capability.h>
+#include <linux/kernel.h>
+#include <linux/ktime.h>
+#include <linux/math64.h>
+#include <linux/string.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
+#include <linux/overflow.h>
 #include <linux/fb.h>
 #include <mt-plat/mtk_gpu_utility.h>
 
@@ -27,6 +33,7 @@
 #include "ged_notify_sw_vsync.h"
 #include "ged_kpi.h"
 #include "ged_global.h"
+#include "ged_hybrid_adaptive.h"
 
 #ifdef GED_DEBUG_FS
 #include "ged_debugFS.h"
@@ -36,6 +43,35 @@ static struct dentry *gpsOppCostsEntry;
 #endif /* CONFIG_MTK_GPU_OPP_STATS_SUPPORT */
 #endif
 static struct kobject *hal_kobj;
+static bool ged_fb_notifier_registered;
+
+#ifdef CONFIG_MTK_GPU_OPP_STATS_SUPPORT
+static struct GED_DVFS_OPP_STAT *ged_dvfs_alloc_opp_report(unsigned int num)
+{
+	struct GED_DVFS_OPP_STAT *report;
+	size_t report_size, trans_count, trans_size, total_size;
+	uint32_t *trans;
+	int i;
+
+	if (!num ||
+	    check_mul_overflow((size_t)num, (size_t)num, &trans_count) ||
+	    check_mul_overflow(trans_count, sizeof(*trans), &trans_size) ||
+	    check_mul_overflow((size_t)num, sizeof(*report), &report_size) ||
+	    check_add_overflow(report_size, trans_size, &total_size))
+		return NULL;
+
+	report = vmalloc(total_size);
+	if (!report)
+		return NULL;
+
+	memset(report, 0, report_size);
+	trans = (uint32_t *)(report + num);
+	for (i = 0; i < num; i++)
+		report[i].uMem.aTrans = trans + (size_t)i * num;
+
+	return report;
+}
+#endif /* CONFIG_MTK_GPU_OPP_STATS_SUPPORT */
 
 int tokenizer(char *pcSrc, int i32len, int *pi32IndexArray, int i32NumToken)
 {
@@ -129,13 +165,7 @@ static int ged_dvfs_opp_cost_seq_show(struct seq_file *psSeqFile,
 		struct GED_DVFS_OPP_STAT *report;
 
 		mtk_custom_get_gpu_freq_level_count(&ui32FqCount);
-		report = NULL;
-
-		if (ui32FqCount) {
-			report =
-				vmalloc(sizeof(struct GED_DVFS_OPP_STAT) *
-					ui32FqCount);
-		}
+		report = ged_dvfs_alloc_opp_report(ui32FqCount);
 
 		if (!ged_dvfs_query_opp_cost(report, ui32FqCount, false)) {
 
@@ -215,13 +245,7 @@ static ssize_t opp_logs_show(struct kobject *kobj,
 	struct GED_DVFS_OPP_STAT *report;
 
 	mtk_custom_get_gpu_freq_level_count(&ui32FqCount);
-	report = NULL;
-
-	if (ui32FqCount) {
-		report =
-			vmalloc(sizeof(struct GED_DVFS_OPP_STAT) *
-			ui32FqCount);
-	}
+	report = ged_dvfs_alloc_opp_report(ui32FqCount);
 
 	if (!ged_dvfs_query_opp_cost(report, ui32FqCount, false)) {
 
@@ -639,17 +663,117 @@ static int ged_fb_notifier_callback(struct notifier_block *self,
 	case FB_BLANK_UNBLANK:
 		g_ui32EventStatus |= GED_EVENT_LCD;
 		ged_dvfs_probe_signal(GED_GAS_SIGNAL_EVENT);
+		ged_hybrid_adaptive_display_event(true, true);
 		break;
 	case FB_BLANK_POWERDOWN:
 		g_ui32EventStatus &= ~GED_EVENT_LCD;
 		ged_dvfs_probe_signal(GED_GAS_SIGNAL_EVENT);
+		ged_hybrid_adaptive_display_event(true, false);
 		break;
 	default:
+		ged_hybrid_adaptive_display_event(false, false);
 		break;
 	}
 
 	return 0;
 }
+
+#ifdef CONFIG_MACH_MT6785
+static const char *ged_hybrid_adaptive_mode_name(unsigned int mode)
+{
+	switch (mode) {
+	case GED_HA_MODE_OBSERVE:
+		return "observe";
+	case GED_HA_MODE_AUTO:
+		return "auto";
+	default:
+		return "off";
+	}
+}
+
+static const char *ged_hybrid_adaptive_state_name(unsigned int state)
+{
+	return state == GED_HA_STATE_RENDER ? "render" : "baseline";
+}
+
+static ssize_t hybrid_adaptive_show(struct kobject *kobj,
+		struct kobj_attribute *attr, char *buf)
+{
+	struct ged_hybrid_adaptive_status status;
+	u64 now_ns = ktime_get_ns();
+	u64 sample_age_ms = 0;
+	u64 expiry_in_ms = 0;
+	const char *display;
+
+	(void)kobj;
+	(void)attr;
+	ged_hybrid_adaptive_get_status(&status);
+	if (status.last_observation_ns &&
+		now_ns >= status.last_observation_ns)
+		sample_age_ms = div_u64(now_ns - status.last_observation_ns,
+			1000000);
+	if (status.expiry_ns > now_ns)
+		expiry_in_ms = div_u64(status.expiry_ns - now_ns, 1000000);
+	if (!status.display_known)
+		display = "unknown";
+	else
+		display = status.display_on ? "on" : "off";
+
+	return scnprintf(buf, PAGE_SIZE,
+		"mode=%s state=%s generation=%llu reason=%u display=%s "
+		"suspended=%u sample_valid=%u sample_generation=%llu "
+		"sample_timestamp_ns=%llu sample_queue_ns=%llu "
+		"sample_fence_ns=%llu sample_pid=%u sample_window_id=%llu "
+		"sample_frame_id=%u sample_age_ms=%llu "
+		"target_fps_valid=%u target_fps=%u gpu_loading=%u "
+		"cpu_remaining_ns=%lld gpu_remaining_ns=%lld "
+		"expiry_in_ms=%llu shutting_down=%u\n",
+		ged_hybrid_adaptive_mode_name(status.mode),
+		ged_hybrid_adaptive_state_name(status.state),
+		(unsigned long long)status.generation, status.reason, display,
+		status.suspended, status.sample_valid,
+		(unsigned long long)status.sample_generation,
+		(unsigned long long)status.sample_timestamp_ns,
+		(unsigned long long)status.sample_queue_timestamp_ns,
+		(unsigned long long)status.sample_fence_timestamp_ns,
+		status.sample_pid,
+		(unsigned long long)status.sample_window_id,
+		status.sample_frame_id,
+		(unsigned long long)sample_age_ms,
+		status.sample_target_fps_valid, status.sample_target_fps,
+		status.sample_gpu_loading,
+		(long long)status.sample_cpu_remained_ns,
+		(long long)status.sample_gpu_remained_ns,
+		(unsigned long long)expiry_in_ms, status.shutting_down);
+}
+
+static ssize_t hybrid_adaptive_store(struct kobject *kobj,
+		struct kobj_attribute *attr, const char *buf, size_t count)
+{
+	unsigned int mode;
+	int ret;
+
+	(void)kobj;
+	(void)attr;
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+	if (sysfs_streq(buf, "off"))
+		mode = GED_HA_MODE_OFF;
+	else if (sysfs_streq(buf, "observe"))
+		mode = GED_HA_MODE_OBSERVE;
+	else if (sysfs_streq(buf, "auto"))
+		mode = GED_HA_MODE_AUTO;
+	else
+		return -EINVAL;
+
+	ret = ged_hybrid_adaptive_set_mode(mode);
+	return ret ? ret : count;
+}
+
+static struct kobj_attribute kobj_attr_hybrid_adaptive =
+	__ATTR(hybrid_adaptive, 0600, hybrid_adaptive_show,
+		hybrid_adaptive_store);
+#endif /* CONFIG_MACH_MT6785 */
 
 struct ged_event_change_entry_t {
 	ged_event_change_fp callback;
@@ -771,6 +895,14 @@ GED_ERROR ged_hal_init(void)
 		goto ERROR;
 	}
 
+#ifdef CONFIG_MACH_MT6785
+	err = ged_hybrid_adaptive_init();
+	if (err) {
+		GED_LOGE("Failed to init hybrid adaptive observer!\n");
+		goto ERROR;
+	}
+#endif
+
 	err = ged_sysfs_create_file(hal_kobj,
 		&kobj_attr_total_gpu_freq_level_count);
 	if (unlikely(err != GED_OK)) {
@@ -870,9 +1002,19 @@ GED_ERROR ged_hal_init(void)
 	}
 #endif
 
+#ifdef CONFIG_MACH_MT6785
+	err = ged_sysfs_create_file(hal_kobj, &kobj_attr_hybrid_adaptive);
+	if (unlikely(err != GED_OK)) {
+		GED_LOGE("Failed to create hybrid_adaptive entry!\n");
+		goto ERROR;
+	}
+#endif
+
 	ged_fb_notifier.notifier_call = ged_fb_notifier_callback;
 	if (fb_register_client(&ged_fb_notifier))
 		GED_LOGE("Register fb_notifier fail!\n");
+	else
+		ged_fb_notifier_registered = true;
 
 	return err;
 
@@ -885,6 +1027,17 @@ ERROR:
 //-----------------------------------------------------------------------------
 void ged_hal_exit(void)
 {
+#ifdef CONFIG_MACH_MT6785
+	ged_hybrid_adaptive_quiesce();
+#endif
+	if (ged_fb_notifier_registered) {
+		fb_unregister_client(&ged_fb_notifier);
+		ged_fb_notifier_registered = false;
+	}
+#ifdef CONFIG_MACH_MT6785
+	ged_hybrid_adaptive_exit();
+	ged_sysfs_remove_file(hal_kobj, &kobj_attr_hybrid_adaptive);
+#endif
 #ifdef GED_ENABLE_DVFS_LOADING_MODE
 	ged_sysfs_remove_file(hal_kobj, &kobj_attr_dvfs_loading_mode);
 #endif

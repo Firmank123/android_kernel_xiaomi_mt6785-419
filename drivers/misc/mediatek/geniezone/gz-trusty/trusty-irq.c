@@ -474,6 +474,7 @@ static int trusty_irq_init_per_cpu_irq(struct trusty_irq_state *is, int tirq)
 
 	if (ppi_node) {
 		struct of_phandle_args oirq;
+		struct irq_domain *domain;
 
 		if (irq >= 32) {
 			ret = -EINVAL;
@@ -487,7 +488,10 @@ static int trusty_irq_init_per_cpu_irq(struct trusty_irq_state *is, int tirq)
 		oirq.args[1] = irq - 16;
 		oirq.args[2] = 0;
 
-		irq = irq_create_of_mapping(&oirq);
+		domain = irq_find_host(ppi_node);
+		irq = domain ? irq_find_mapping(domain, tirq) : 0;
+		if (!irq)
+			irq = irq_create_of_mapping(&oirq);
 		if (irq == 0) {
 			ret = -EINVAL;
 			goto err_request_percpu_irq;
