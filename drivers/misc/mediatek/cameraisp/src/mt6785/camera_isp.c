@@ -3662,7 +3662,7 @@ static long ISP_ioctl(struct file *pFile,
 					(void *)Param,
 					sizeof(struct ISP_PM_QOS_INFO_STRUCT))
 					== 0) {
-				ISP_SetPMQOS(E_BW_UPDATE,
+				Ret = ISP_SetPMQOS(E_BW_UPDATE,
 					pm_qos_info.module,
 					(unsigned int *)pm_qos_info.port_bw);
 			} else {
@@ -3679,7 +3679,7 @@ static long ISP_ioctl(struct file *pFile,
 				(void *)Param,
 				sizeof(struct ISP_SV_PM_QOS_INFO_STRUCT))
 				== 0) {
-				SV_SetPMQOS(E_BW_UPDATE,
+				Ret = SV_SetPMQOS(E_BW_UPDATE,
 					pm_qos_info.module,
 					(unsigned int *)pm_qos_info.port_bw);
 			} else {
@@ -3692,7 +3692,7 @@ static long ISP_ioctl(struct file *pFile,
 		if (copy_from_user(DebugFlag,
 				(void *)Param,
 				sizeof(unsigned int) * 2) == 0) {
-			ISP_SetPMQOS(E_BW_CLR, DebugFlag[1], DebugFlag);
+			Ret = ISP_SetPMQOS(E_BW_CLR, DebugFlag[1], DebugFlag);
 		} else {
 			LOG_NOTICE("Cmd(%d) copy fail\n", Cmd);
 			Ret = -EFAULT;
@@ -3702,7 +3702,7 @@ static long ISP_ioctl(struct file *pFile,
 		if (copy_from_user(DebugFlag,
 				(void *)Param,
 				sizeof(unsigned int) * 2) == 0) {
-			SV_SetPMQOS(E_BW_CLR, DebugFlag[1], DebugFlag);
+			Ret = SV_SetPMQOS(E_BW_CLR, DebugFlag[1], DebugFlag);
 		} else {
 			LOG_NOTICE("Cmd(%d) copy fail\n", Cmd);
 			Ret = -EFAULT;
