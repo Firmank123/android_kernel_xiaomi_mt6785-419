@@ -578,10 +578,12 @@ int ISP_SetPMQOS(
 			LOG_DBG("1:DFS Clk_0:%d", pvalue[0]);
 			return 1;
 #else
-			u32 step, i = 0;
+			u32 step = 0, i;
 			u64 freq[ISP_CLK_LEVEL_CNT] = {0};
 
 			mtk_dfs_supported(freq, &step);
+			if (!step || step > ARRAY_SIZE(freq))
+				return 0;
 
 			for (i = 0; i < step; i++)
 				pvalue[i] = freq[i];
