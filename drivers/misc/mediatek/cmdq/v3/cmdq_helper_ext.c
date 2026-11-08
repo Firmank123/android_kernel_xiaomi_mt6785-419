@@ -5345,7 +5345,7 @@ EXPORT_SYMBOL(cmdq_pkt_stop);
 
 s32 cmdq_helper_mbox_register(struct device *dev)
 {
-	u32 i;
+	int i, mbox_count;
 	s32 chan_id;
 	struct cmdq_client *clt;
 #if defined(CONFIG_MTK_MT6382_BDG)
@@ -5367,11 +5367,16 @@ s32 cmdq_helper_mbox_register(struct device *dev)
 	CMDQ_LOG("sec thread index %u to %u\n", sec_thread[0], sec_thread[1]);
 #endif
 
+	mbox_count = of_count_phandle_with_args(dev->of_node, "mboxes",
+						"#mbox-cells");
+	if (mbox_count < 0)
+		CMDQ_ERR("cannot count mailbox entries:%d\n", mbox_count);
+
 	/* for display we start from thread 0 */
-	for (i = 0; i < CMDQ_MAX_THREAD_COUNT; i++) {
+	for (i = 0; i < mbox_count; i++) {
 		clt = cmdq_mbox_create(dev, i);
 		if (!clt || IS_ERR(clt)) {
-			CMDQ_LOG("register mbox stop:0x%p idx:%u\n", clt, i);
+			CMDQ_LOG("register mbox stop:0x%p idx:%d\n", clt, i);
 			break;
 		}
 #ifdef CMDQ_SECURE_PATH_SUPPORT
@@ -5384,8 +5389,9 @@ s32 cmdq_helper_mbox_register(struct device *dev)
 		chan_id = cmdq_mbox_chan_id(clt->chan);
 #endif
 
-		if (chan_id < 0 || cmdq_clients[chan_id]) {
-			CMDQ_ERR("channel and client duplicate:%d\n", chan_id);
+		if (chan_id < 0 || chan_id >= ARRAY_SIZE(cmdq_clients) ||
+		    cmdq_clients[chan_id]) {
+			CMDQ_ERR("invalid or duplicate channel:%d\n", chan_id);
 			cmdq_mbox_destroy(clt);
 			continue;
 		}
