@@ -83,7 +83,6 @@
 
 #define DC_INIT_VALUE					0x1FFFF
 
-#define CURRENT_DS28E16_TASK                       0
 
 extern unsigned char last_result_byte;
 

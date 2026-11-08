@@ -3070,7 +3070,7 @@ int mtk_vcodec_enc_ctrls_setup(struct mtk_vcodec_ctx *ctx)
 	memset(&cfg, 0, sizeof(cfg));
 	cfg.id = V4L2_CID_MPEG_MTK_ENCODE_REFP_MAX_FRAME_NUM;
 	cfg.type = V4L2_CTRL_TYPE_INTEGER;
-	cfg.flags = V4L2_CTRL_FLAG_VOLATILE;
+	cfg.flags = V4L2_CTRL_FLAG_READ_ONLY | V4L2_CTRL_FLAG_VOLATILE;
 	cfg.name = "Video encode refp max frame num";
 	cfg.min = 0;
 	cfg.max = 0x7ffffff;

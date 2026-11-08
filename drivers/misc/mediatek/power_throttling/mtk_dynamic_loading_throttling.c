@@ -270,6 +270,7 @@ static int dlpt_get_uisoc(void)
 
 	ret = power_supply_get_property(psy, POWER_SUPPLY_PROP_CAPACITY,
 					&prop);
+	power_supply_put(psy);
 	if (ret || prop.intval < 0)
 		return -EINVAL;
 	else

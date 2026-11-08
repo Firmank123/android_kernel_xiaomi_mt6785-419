@@ -40,6 +40,7 @@
 #include <linux/wait.h>
 #include <linux/slab.h>
 #include <linux/fs.h>
+#include <linux/pid.h>
 #include <linux/sched.h>
 #include <linux/poll.h>
 #include <linux/power_supply.h>
@@ -77,6 +78,7 @@ static struct charger_manager *pinfo = NULL;
 struct charger_manager *p_info = NULL;
 static struct list_head consumer_head = LIST_HEAD_INIT(consumer_head);
 static DEFINE_MUTEX(consumer_mutex);
+static DEFINE_MUTEX(charger_thermal_lock);
 
 struct tag_bootmode {
 	u32 size;
@@ -1084,7 +1086,7 @@ int charger_manager_get_prop_system_temp_level(void)
 	if (pinfo == NULL)
 		return false;
 
-	return pinfo->system_temp_level;
+	return READ_ONCE(pinfo->system_temp_level);
 }
 
 int charger_manager_get_prop_set_temp_enable(void)
@@ -1334,75 +1336,118 @@ void charger_manager_set_prop_set_temp_num(int vol)
 }
 
 
-void charger_manager_set_prop_system_temp_level(int temp_level)
+static void __charger_manager_apply_system_temp_level(struct charger_manager *info)
 {
 	int thermal_icl_ua = 0, thermal_fcc_ua = 0;
+	int level = info->system_temp_level;
 	int ret = 0;
 	int hvdcp3_type = HVDCP3_NONE;
 	union power_supply_propval val = {0,};
 	union power_supply_propval real_type = {0,};
 
-	pr_info("%s: charger_online=%d\n", __func__, charger_online);
-
-	if (pinfo == NULL || pinfo->usb_psy == NULL)
+	if (!charger_online || !info->usb_psy || info->system_temp_level_max <= 0)
 		return;
-    power_supply_get_property(pinfo->usb_psy,
-			POWER_SUPPLY_PROP_REAL_TYPE, &real_type);
-
-	if (temp_level < 0)
-		pinfo->system_temp_level = 0;
-	else if (temp_level > pinfo->system_temp_level_max - 1)
-		pinfo->system_temp_level = pinfo->system_temp_level_max - 1;
-	else
-		pinfo->system_temp_level = temp_level;
-
-	if (!charger_online)
-		return;
+	power_supply_get_property(info->usb_psy, POWER_SUPPLY_PROP_REAL_TYPE,
+				  &real_type);
 
 	switch (real_type.intval) {
 	case POWER_SUPPLY_TYPE_USB_HVDCP:
-		thermal_icl_ua = pinfo->thermal_mitigation_qc2[pinfo->system_temp_level];
+		thermal_icl_ua = info->thermal_mitigation_qc2[level];
 		break;
 	case POWER_SUPPLY_TYPE_USB_HVDCP_3P5:
-		thermal_fcc_ua =
-			pinfo->thermal_mitigation_qc3p5[pinfo->system_temp_level];
+		thermal_fcc_ua = info->thermal_mitigation_qc3p5[level];
 		break;
 	case POWER_SUPPLY_TYPE_USB_HVDCP_3:
-		power_supply_get_property(pinfo->usb_psy,
-			POWER_SUPPLY_PROP_HVDCP3_TYPE, &val);
+		power_supply_get_property(info->usb_psy,
+					  POWER_SUPPLY_PROP_HVDCP3_TYPE, &val);
 		hvdcp3_type = val.intval;
 		if (hvdcp3_type == HVDCP3_CLASSB_27W)
-			thermal_fcc_ua =
-				pinfo->thermal_mitigation_qc3_classb[pinfo->system_temp_level];
+			thermal_fcc_ua = info->thermal_mitigation_qc3_classb[level];
 		else
-			thermal_fcc_ua =
-				pinfo->thermal_mitigation_qc3[pinfo->system_temp_level];
+			thermal_fcc_ua = info->thermal_mitigation_qc3[level];
 		break;
 	case POWER_SUPPLY_TYPE_USB_PD:
-			thermal_fcc_ua =
-					pinfo->thermal_mitigation_pd_base[pinfo->system_temp_level];
+		thermal_fcc_ua = info->thermal_mitigation_pd_base[level];
 		break;
 	case POWER_SUPPLY_TYPE_USB_DCP:
 	default:
-		thermal_icl_ua = pinfo->thermal_mitigation_dcp[pinfo->system_temp_level];
+		thermal_icl_ua = info->thermal_mitigation_dcp[level];
 		break;
 	}
 
 	pr_info("%s, system_temp_level:%d thermal_icl_ua:%d thermal_fcc_ua: %d usb_type:%d\n",
-			 __func__, pinfo->system_temp_level, thermal_icl_ua,
+			 __func__, level, thermal_icl_ua,
 			 thermal_fcc_ua, real_type.intval);
 	if (thermal_icl_ua) {
 		ret = charger_manager_set_input_current(thermal_icl_ua);
 		if (ret > 0)
 			pr_info("%s: set thermal input current success\n", __func__);
 	} else {
-		if (pinfo->data.enable_vote) {
+		if (info->data.enable_vote) {
 			ret = charger_manager_set_current_limit(thermal_fcc_ua, THERMAL_FCC);
 			if (ret > 0)
 				pr_info("%s: set thermal current limit success\n", __func__);
 		}
 	}
-	power_supply_changed(pinfo->usb_psy);
+	power_supply_changed(info->usb_psy);
+}
+
+static void charger_manager_check_thermal_owner(struct charger_manager *info)
+{
+	bool alive;
+
+	mutex_lock(&charger_thermal_lock);
+	if (!info->thermal_owner)
+		goto out;
+
+	rcu_read_lock();
+	alive = pid_task(info->thermal_owner, PIDTYPE_TGID) != NULL;
+	rcu_read_unlock();
+	if (!alive) {
+		put_pid(info->thermal_owner);
+		info->thermal_owner = NULL;
+		WRITE_ONCE(info->system_temp_level, 0);
+		__charger_manager_apply_system_temp_level(info);
+	}
+out:
+	mutex_unlock(&charger_thermal_lock);
+}
+
+void charger_manager_apply_system_temp_level(void)
+{
+	struct charger_manager *info = pinfo;
+
+	if (!info)
+		return;
+
+	mutex_lock(&charger_thermal_lock);
+	__charger_manager_apply_system_temp_level(info);
+	mutex_unlock(&charger_thermal_lock);
+}
+
+void charger_manager_set_prop_system_temp_level(int temp_level)
+{
+	struct charger_manager *info = pinfo;
+	struct pid *owner = NULL;
+	char comm[TASK_COMM_LEN];
+
+	if (!info || !info->usb_psy || info->system_temp_level_max <= 0)
+		return;
+
+	temp_level = clamp(temp_level, 0, info->system_temp_level_max - 1);
+	if (IS_ENABLED(CONFIG_TARGET_PROJECT_K7B) && temp_level) {
+		/* Xiaomi's daemon owns its level for the lifetime of its process. */
+		get_task_comm(comm, current->group_leader);
+		if (!strcmp(comm, "mi_thermald"))
+			owner = get_task_pid(current, PIDTYPE_TGID);
+	}
+
+	mutex_lock(&charger_thermal_lock);
+	put_pid(info->thermal_owner);
+	info->thermal_owner = owner;
+	WRITE_ONCE(info->system_temp_level, temp_level);
+	__charger_manager_apply_system_temp_level(info);
+	mutex_unlock(&charger_thermal_lock);
 }
 
 int charger_manager_pe4_is_online(void)
@@ -2419,11 +2464,8 @@ static void check_batt_authentic(void)
 static int mtk_charger_plug_in(struct charger_manager *info,
 				enum charger_type chr_type)
 {
-	int rc;
-	union power_supply_propval temp_level = {0,};
 	info->chr_type = chr_type;
 	info->charger_thread_polling = true;
-	charger_online = true;
 
 	info->can_charging = true;
 	info->enable_dynamic_cv = true;
@@ -2442,13 +2484,10 @@ static int mtk_charger_plug_in(struct charger_manager *info,
 	charger_dev_set_input_current(info->chg1_dev,
 				info->chg1_data.input_current_limit);
 
-	rc = power_supply_get_property(pinfo->battery_psy,POWER_SUPPLY_PROP_CHARGE_CONTROL_LIMIT,&temp_level);
-	if (rc < 0) {
-		pr_info("Couldn't get POWER_SUPPLY_PROP_CHARGE_CONTROL_LIMIT mode:%d\n", rc);
-		return false;
-	}
-	pr_info(" Get POWER_SUPPLY_PROP_CHARGE_CONTROL_LIMIT mode:%d\n", temp_level.intval);
-	charger_manager_set_prop_system_temp_level(temp_level.intval);
+	mutex_lock(&charger_thermal_lock);
+	charger_online = true;
+	__charger_manager_apply_system_temp_level(info);
+	mutex_unlock(&charger_thermal_lock);
 
 	charger_dev_plug_in(info->chg1_dev);
 	check_batt_authentic();
@@ -2469,15 +2508,17 @@ static int mtk_charger_plug_out(struct charger_manager *info)
 
 	chr_err("%s\n", __func__);
 
+	mutex_lock(&charger_thermal_lock);
+	charger_online = false;
 	if (info->data.enable_vote) {
 		charger_manager_set_current_limit(info->data.current_max, THERMAL_FCC);
 		charger_manager_set_current_limit(info->data.current_max, STEPCHG_FCC);
 	}
 	charger_manager_set_input_current(3000000);
+	mutex_unlock(&charger_thermal_lock);
 	info->step_flag = NORMAL;
 	info->chr_type = CHARGER_UNKNOWN;
 	info->charger_thread_polling = false;
-	charger_online = false;
 	info->mode_bf = 0;
 
 	pdata1->disable_charging_count = 0;
@@ -3139,6 +3180,7 @@ static int charger_routine_thread(void *arg)
 			info->pd_reset = false;
 		}
 
+		charger_manager_check_thermal_owner(info);
 		is_charger_on = mtk_is_charger_on(info);
 
 #if CONFIG_TOUCHSCREEN_COMMON
@@ -5305,7 +5347,6 @@ static int mtk_charger_probe(struct platform_device *pdev)
 
 	info->sw_jeita.error_recovery_flag = true;
 	info->is_input_suspend = false;
-	info->system_temp_level = 0;
 	if (info->data.enable_vote) {
 		info->effective_fcc = info->data.current_max;
 	}
@@ -5418,6 +5459,10 @@ static int mtk_charger_remove(struct platform_device *dev)
 {
 	struct charger_manager *info = platform_get_drvdata(dev);
 
+	mutex_lock(&charger_thermal_lock);
+	put_pid(info->thermal_owner);
+	info->thermal_owner = NULL;
+	mutex_unlock(&charger_thermal_lock);
 	mtk_pe50_deinit(info);
 	return 0;
 }

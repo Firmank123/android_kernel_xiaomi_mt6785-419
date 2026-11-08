@@ -126,16 +126,6 @@ typedef u64 CMDQ_VARIABLE;
 
 #define CMDQ_MAX_SRAM_OWNER_NAME	(32)
 
-#define CMDQ_DELAY_TPR_MASK_BIT		(11)
-#define CMDQ_DELAY_TPR_MASK_VALUE	(1 << 17 | 1 << 14 | 1 << 11)
-
-#define CMDQ_DELAY_MAX_SET		(3)
-#define CMDQ_DELAY_SET_START_CPR	(0)
-#define CMDQ_DELAY_SET_DURATION_CPR	(1)
-#define CMDQ_DELAY_SET_RESULT_CPR	(2)
-#define CMDQ_DELAY_SET_MAX_CPR		(3)
-#define CMDQ_DELAY_THD_SIZE		(64 * 64) /* delay inst in bytes */
-
 /* #define CMDQ_DUMP_GIC (0) */
 
 #define CMDQ_DUMP_FIRSTERROR

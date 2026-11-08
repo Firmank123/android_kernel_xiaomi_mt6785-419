@@ -2,6 +2,7 @@
 #include <linux/swap_cgroup.h>
 #include <linux/vmalloc.h>
 #include <linux/mm.h>
+#include <linux/memcontrol.h>
 
 #include <linux/swapops.h> /* depends on mm.h include */
 
@@ -171,7 +172,7 @@ int swap_cgroup_swapon(int type, unsigned long max_pages)
 	unsigned long length;
 	struct swap_cgroup_ctrl *ctrl;
 
-	if (!do_swap_account)
+	if (mem_cgroup_disabled())
 		return 0;
 
 	length = DIV_ROUND_UP(max_pages, SC_PER_PAGE);
@@ -199,7 +200,7 @@ int swap_cgroup_swapon(int type, unsigned long max_pages)
 	return 0;
 nomem:
 	pr_info("couldn't allocate enough memory for swap_cgroup\n");
-	pr_info("swap_cgroup can be disabled by swapaccount=0 boot option\n");
+	pr_info("swap owner tracking is required while memory cgroups are enabled\n");
 	return -ENOMEM;
 }
 
@@ -209,7 +210,7 @@ void swap_cgroup_swapoff(int type)
 	unsigned long i, length;
 	struct swap_cgroup_ctrl *ctrl;
 
-	if (!do_swap_account)
+	if (mem_cgroup_disabled())
 		return;
 
 	mutex_lock(&swap_cgroup_mutex);

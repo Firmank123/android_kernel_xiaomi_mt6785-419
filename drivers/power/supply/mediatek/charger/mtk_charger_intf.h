@@ -437,7 +437,6 @@ struct charger_manager {
 	int hvdcp_check_count;
 	bool can_charging;
 	int cable_out_cnt;
-	int temp_level;
 
 	int (*do_algorithm)(struct charger_manager *cm);
 	int (*plug_in)(struct charger_manager *cm);
@@ -556,6 +555,7 @@ struct charger_manager {
 	/*thermal level*/
 	int system_temp_level;
 	int system_temp_level_max;
+	struct pid *thermal_owner;
 	int set_temp_enable;
 	int set_temp_num;
 
@@ -633,7 +633,6 @@ struct mt_charger {
 	struct power_supply_desc main_desc;
 	struct power_supply_config main_cfg;
 	struct power_supply *main_psy;
-	struct power_supply *charger_identify_psy;
 	struct chg_type_info *cti;
 	bool chg_online; /* Has charger in or not */
 	bool vbus_disable;

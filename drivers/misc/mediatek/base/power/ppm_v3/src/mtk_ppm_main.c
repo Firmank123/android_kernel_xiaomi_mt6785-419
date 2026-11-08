@@ -86,45 +86,116 @@ struct ppm_data ppm_main_info = {
 	.policy_list = LIST_HEAD_INIT(ppm_main_info.policy_list),
 };
 
-void ppm_init_qos_request(void)
+void ppm_deinit_qos_request(void)
 {
-	struct cpufreq_policy *ppm_cpufreq_policy;
-	int i = 0, num = 0, cpu;
+	int i;
 
-	for (; i < ppm_main_info.cluster_num; i++) {
-		ppm_main_info.cluster_info[i].max_freq_req =
-			kzalloc(sizeof(*ppm_main_info.cluster_info[i].max_freq_req), GFP_KERNEL);
-		if (!ppm_main_info.cluster_info[i].max_freq_req) {
-			pr_info("ppm init qos requset fail\n");
-			return;
+	if (!ppm_main_info.cluster_info)
+		return;
+
+	for (i = 0; i < ppm_main_info.cluster_num; i++) {
+		struct ppm_cluster_info *c = &ppm_main_info.cluster_info[i];
+
+		if (c->max_freq_req) {
+			if (freq_qos_request_active(c->max_freq_req))
+				freq_qos_remove_request(c->max_freq_req);
+			kfree(c->max_freq_req);
+			c->max_freq_req = NULL;
 		}
-		ppm_main_info.cluster_info[i].min_freq_req =
-			kzalloc(sizeof(*ppm_main_info.cluster_info[i].min_freq_req), GFP_KERNEL);
-		if (!ppm_main_info.cluster_info[i].min_freq_req) {
-			pr_info("ppm init qos request fail\n");
-			kfree(ppm_main_info.cluster_info[i].max_freq_req);
-			return;
+		if (c->min_freq_req) {
+			if (freq_qos_request_active(c->min_freq_req))
+				freq_qos_remove_request(c->min_freq_req);
+			kfree(c->min_freq_req);
+			c->min_freq_req = NULL;
 		}
 	}
-	for_each_possible_cpu(cpu) {
-		if (num >= ppm_main_info.cluster_num)
+}
+
+int ppm_init_qos_request(void)
+{
+	struct cpufreq_policy *policy;
+	int i, ret = 0;
+	bool already_init = true;
+
+	if (!ppm_main_info.cluster_num || !ppm_main_info.cluster_info)
+		return -ENODEV;
+
+	for (i = 0; i < ppm_main_info.cluster_num; i++) {
+		struct ppm_cluster_info *c = &ppm_main_info.cluster_info[i];
+
+		if (!c->max_freq_req || !c->min_freq_req ||
+		    !freq_qos_request_active(c->max_freq_req) ||
+		    !freq_qos_request_active(c->min_freq_req)) {
+			already_init = false;
 			break;
-		ppm_cpufreq_policy = cpufreq_cpu_get(cpu);
-		if (!ppm_cpufreq_policy)
-			continue;
-		freq_qos_add_request(&ppm_cpufreq_policy->constraints,
-				ppm_main_info.cluster_info[num].max_freq_req,
-				FREQ_QOS_MAX, FREQ_QOS_MAX_DEFAULT_VALUE);
-		freq_qos_add_request(&ppm_cpufreq_policy->constraints,
-				ppm_main_info.cluster_info[num].min_freq_req,
-				FREQ_QOS_MIN, 0);
-		if (ppm_main_info.cluster_info + num)
-			cpu = cpu + ppm_main_info.cluster_info[num].core_num;
-		pr_info("ppm init qos request cluster %d, cpu = %d\n", num, cpu);
-		cpufreq_cpu_put(ppm_cpufreq_policy);
-		cpu--;
-		num++;
+		}
 	}
+	if (already_init)
+		return 0;
+
+	ppm_deinit_qos_request();
+
+	for (i = 0; i < ppm_main_info.cluster_num; i++) {
+		struct ppm_cluster_info *c = &ppm_main_info.cluster_info[i];
+
+		c->max_freq_req = kzalloc(sizeof(*c->max_freq_req), GFP_KERNEL);
+		if (!c->max_freq_req) {
+			ppm_err("ppm: failed to allocate max_freq_req for cluster %d\n", i);
+			ret = -ENOMEM;
+			goto err_rollback;
+		}
+
+		c->min_freq_req = kzalloc(sizeof(*c->min_freq_req), GFP_KERNEL);
+		if (!c->min_freq_req) {
+			ppm_err("ppm: failed to allocate min_freq_req for cluster %d\n", i);
+			ret = -ENOMEM;
+			goto err_rollback;
+		}
+	}
+
+	for (i = 0; i < ppm_main_info.cluster_num; i++) {
+		struct ppm_cluster_info *c = &ppm_main_info.cluster_info[i];
+
+		policy = cpufreq_cpu_get(c->cpu_id);
+		if (!policy) {
+			ppm_err("ppm: failed to get cpufreq policy for cpu %u (cluster %d)\n",
+				c->cpu_id, i);
+			ret = -ENODEV;
+			goto err_rollback;
+		}
+
+		ret = freq_qos_add_request(&policy->constraints,
+					   c->max_freq_req,
+					   FREQ_QOS_MAX,
+					   FREQ_QOS_MAX_DEFAULT_VALUE);
+		if (ret < 0) {
+			ppm_err("ppm: freq_qos_add_request max failed for cluster %d: %d\n",
+				i, ret);
+			cpufreq_cpu_put(policy);
+			goto err_rollback;
+		}
+
+		ret = freq_qos_add_request(&policy->constraints,
+					   c->min_freq_req,
+					   FREQ_QOS_MIN,
+					   0);
+		if (ret < 0) {
+			ppm_err("ppm: freq_qos_add_request min failed for cluster %d: %d\n",
+				i, ret);
+			cpufreq_cpu_put(policy);
+			goto err_rollback;
+		}
+
+		pr_info("ppm init qos request cluster %d, cpu = %u\n",
+			i, c->cpu_id);
+		cpufreq_cpu_put(policy);
+	}
+
+	return 0;
+
+err_rollback:
+	ppm_deinit_qos_request();
+	return ret;
 }
 
 int ppm_main_freq_to_idx(unsigned int cluster_id,
@@ -780,8 +851,11 @@ int mt_ppm_main(void)
 				|| c_req->cpu_limit[i].has_advise_freq) {
 					notify_dvfs = true;
 					log_print = true;
-					if (ppm_main_info.cluster_info[i].max_freq_req != NULL &&
-					ppm_main_info.cluster_info[i].min_freq_req != NULL) {
+					if (ppm_main_info.cluster_info[i].dvfs_tbl &&
+					    ppm_main_info.cluster_info[i].max_freq_req &&
+					    ppm_main_info.cluster_info[i].min_freq_req &&
+					    freq_qos_request_active(ppm_main_info.cluster_info[i].max_freq_req) &&
+					    freq_qos_request_active(ppm_main_info.cluster_info[i].min_freq_req)) {
 						pr_info("ppm update cpufreq limit ,cluster %d, min freq %d ------max freq %d\n",
 							i,
 	ppm_main_info.cluster_info[i].dvfs_tbl[c_req->cpu_limit[i].min_cpufreq_idx].frequency,
@@ -1209,14 +1283,12 @@ NO_DOE:
 
 static void __exit ppm_main_exit(void)
 {
-	int i = 0;
-
 	FUNC_ENTER(FUNC_LV_MODULE);
 
-	for (; i < ppm_main_info.cluster_num; i++) {
-		kfree(ppm_main_info.cluster_info[i].max_freq_req);
-		kfree(ppm_main_info.cluster_info[i].min_freq_req);
-	}
+	ppm_lock(&ppm_main_info.lock);
+	ppm_deinit_qos_request();
+	ppm_unlock(&ppm_main_info.lock);
+
 	platform_driver_unregister(&ppm_main_info.ppm_pdrv);
 	platform_device_unregister(&ppm_main_info.ppm_pdev);
 

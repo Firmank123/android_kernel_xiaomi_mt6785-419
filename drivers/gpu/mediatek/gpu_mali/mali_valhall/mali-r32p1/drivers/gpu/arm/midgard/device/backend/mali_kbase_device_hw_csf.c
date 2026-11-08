@@ -129,8 +129,13 @@ void kbase_gpu_interrupt(struct kbase_device *kbdev, u32 val)
 	if (val & RESET_COMPLETED)
 		kbase_pm_reset_done(kbdev);
 
-	KBASE_KTRACE_ADD(kbdev, CORE_GPU_IRQ_CLEAR, NULL, val);
-	kbase_reg_write(kbdev, GPU_CONTROL_REG(GPU_IRQ_CLEAR), val);
+	/* Cache completion is shared with the synchronous flush path and must
+	 * be cleared under hwaccess_lock by kbase_clean_caches_done().
+	 */
+	KBASE_KTRACE_ADD(kbdev, CORE_GPU_IRQ_CLEAR, NULL,
+			 val & ~CLEAN_CACHES_COMPLETED);
+	kbase_reg_write(kbdev, GPU_CONTROL_REG(GPU_IRQ_CLEAR),
+			val & ~CLEAN_CACHES_COMPLETED);
 
 	/* kbase_pm_check_transitions (called by kbase_pm_power_changed) must
 	 * be called after the IRQ has been cleared. This is because it might

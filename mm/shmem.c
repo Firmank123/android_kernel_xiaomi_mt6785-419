@@ -1697,19 +1697,9 @@ static int shmem_swapin_page(struct inode *inode, pgoff_t index,
 	if (!error) {
 		error = shmem_add_to_page_cache(page, mapping, index,
 						swp_to_radix_entry(swap));
-		/*
-		 * We already confirmed swap under page lock, and make
-		 * no memory allocation here, so usually no possibility
-		 * of error; but free_swap_and_cache() only trylocks a
-		 * page, so it is just possible that the entry has been
-		 * truncated or holepunched since swap was confirmed.
-		 * shmem_undo_range() will have done some of the
-		 * unaccounting, now delete_from_swap_cache() will do
-		 * the rest.
-		 */
 		if (error) {
+			/* Reclaim can remove the stale swapcache page safely. */
 			mem_cgroup_cancel_charge(page, memcg, false);
-			delete_from_swap_cache(page);
 		}
 	}
 	if (error)

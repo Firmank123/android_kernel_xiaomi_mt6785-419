@@ -617,9 +617,6 @@ struct ContextStruct {
 	struct list_head sram_allocated_list;	/* all allocated SRAM chunk */
 	size_t allocated_sram_count;
 
-	/* Delay set CPR start information */
-	u32 delay_cpr_start;
-
 	void *inst_check_buffer;
 
 #ifdef CMDQ_INSTRUCTION_COUNT

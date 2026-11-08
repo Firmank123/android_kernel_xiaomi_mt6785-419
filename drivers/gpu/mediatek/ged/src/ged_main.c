@@ -35,6 +35,7 @@
 #include "ged_hal.h"
 #include "ged_bridge.h"
 #include "ged_monitor_3D_fence.h"
+#include "ged_hybrid_adaptive.h"
 #include "ged_notify_sw_vsync.h"
 #include "ged_dvfs.h"
 #include "ged_kpi.h"
@@ -403,6 +404,8 @@ unlock_and_return:
 /******************************************************************************
  * Module related
  *****************************************************************************/
+static void ged_pdrv_cleanup(void);
+
 /*
  * ged driver probe
  */
@@ -411,6 +414,20 @@ static int ged_pdrv_probe(struct platform_device *pdev)
 	int err;
 
 	GED_LOGI("@%s: start to probe ged driver\n", __func__);
+
+#ifdef CONFIG_MTK_GPU_OPP_STATS_SUPPORT
+	/* Defer before publishing callbacks if the gpufreq OPP table is not ready. */
+	err = ged_dvfs_init_opp_cost();
+	if (err == -EPROBE_DEFER) {
+		GED_LOGE("@%s: gpufreq opp table not ready (%d), deferring probe\n",
+			__func__, err);
+		return err;
+	}
+	if (err) {
+		GED_LOGE("@%s: failed to init opp cost stats (%d), stats unavailable\n",
+			__func__, err);
+	}
+#endif /* CONFIG_MTK_GPU_OPP_STATS_SUPPORT */
 
 	if (proc_create(GED_DRIVER_DEVICE_NAME, 0644, NULL, &ged_fops)
 		== NULL) {
@@ -448,12 +465,6 @@ static int ged_pdrv_probe(struct platform_device *pdev)
 	err = ged_notify_sw_vsync_system_init();
 	if (unlikely(err != GED_OK)) {
 		GED_LOGE("Failed to init notify sw vsync!\n");
-		goto ERROR;
-	}
-
-	err = ged_dvfs_system_init();
-	if (unlikely(err != GED_OK)) {
-		GED_LOGE("Failed to init common dvfs!\n");
 		goto ERROR;
 	}
 
@@ -524,23 +535,25 @@ static int ged_pdrv_probe(struct platform_device *pdev)
 	gpufreq_ged_log = 0;
 #endif /* GED_BUFFER_LOG_DISABLE */
 
-#ifdef CONFIG_MTK_GPU_OPP_STATS_SUPPORT
-	err = ged_dvfs_init_opp_cost();
-	if (err) {
-		GED_LOGE("@%s: failed to probe ged driver (%d)\n", __func__, err);
+	err = ged_dvfs_system_init();
+	if (unlikely(err != GED_OK)) {
+		GED_LOGE("Failed to init common dvfs!\n");
+		goto ERROR;
 	}
-#endif /* CONFIG_MTK_GPU_OPP_STATS_SUPPORT */
 
 	GED_LOGI("@%s: ged driver probe done\n", __func__);
 
+	return GED_OK;
+
 ERROR:
+	ged_pdrv_cleanup();
 	return err;
 }
-/*
- * unregister the gpufreq driver, remove fs node
- */
-static void ged_exit(void)
+
+static void ged_pdrv_cleanup(void)
 {
+	ged_hybrid_adaptive_quiesce();
+
 #ifndef GED_BUFFER_LOG_DISABLE
 	ged_log_buf_free(gpufreq_ged_log);
 	gpufreq_ged_log = 0;
@@ -591,6 +604,14 @@ static void ged_exit(void)
 	ged_sysfs_exit();
 
 	remove_proc_entry(GED_DRIVER_DEVICE_NAME, NULL);
+}
+
+/*
+ * unregister the gpufreq driver, remove fs node
+ */
+static void ged_exit(void)
+{
+	ged_pdrv_cleanup();
 
 	platform_driver_unregister(&g_ged_pdrv);
 }

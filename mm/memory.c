@@ -63,6 +63,7 @@
 #include <linux/elf.h>
 #include <linux/gfp.h>
 #include <linux/migrate.h>
+#include <linux/swap_cgroup.h>
 #include <linux/string.h>
 #include <linux/dma-debug.h>
 #include <linux/debugfs.h>
@@ -2862,6 +2863,36 @@ EXPORT_SYMBOL(unmap_mapping_range);
  * We return with the mmap_sem locked or unlocked in the same cases
  * as does filemap_fault().
  */
+static void count_swapin_anon_cost(struct page *page, swp_entry_t entry,
+				   struct mem_cgroup *charged_memcg)
+{
+	struct pglist_data *pgdat = page_pgdat(page);
+	struct mem_cgroup *memcg;
+	struct lruvec *lruvec;
+	unsigned short id;
+
+	if (!mem_cgroup_disabled()) {
+		id = lookup_swap_cgroup_id(entry);
+		if (id) {
+			memcg = mem_cgroup_get_swap_owner(id);
+			if (memcg) {
+				lruvec = mem_cgroup_lruvec(pgdat, memcg);
+				mod_lruvec_state(lruvec, WORKINGSET_RESTORE_ANON,
+						 hpage_nr_pages(page));
+				mem_cgroup_put(memcg);
+				return;
+			}
+		}
+	}
+
+	if (charged_memcg)
+		lruvec = mem_cgroup_lruvec(pgdat, charged_memcg);
+	else
+		lruvec = node_lruvec(pgdat);
+	mod_lruvec_state(lruvec, WORKINGSET_RESTORE_ANON,
+			 hpage_nr_pages(page));
+}
+
 vm_fault_t do_swap_page(struct vm_fault *vmf)
 {
 	struct vm_area_struct *vma = vmf->vma;
@@ -2871,6 +2902,8 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 	pte_t pte;
 	int locked;
 	int exclusive = 0;
+	bool reclassify_swapin = false;
+	struct page *sync_page = NULL;
 	vm_fault_t ret = 0;
 
 	if (!pte_unmap_same(vma->vm_mm, vmf->pmd, vmf->pte, vmf->orig_pte))
@@ -2915,7 +2948,7 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 				__SetPageLocked(page);
 				__SetPageSwapBacked(page);
 				set_page_private(page, entry.val);
-				lru_cache_add_anon(page);
+				sync_page = page;
 				swap_readpage(page, true);
 			}
 		} else {
@@ -2969,18 +3002,28 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 			page_private(page) != entry.val)) && swapcache)
 		goto out_page;
 
+	reclassify_swapin = PageSwapCache(page) && !PageAnon(page);
+
 	page = ksm_might_need_to_copy(page, vma, vmf->address);
 	if (unlikely(!page)) {
 		ret = VM_FAULT_OOM;
-		page = swapcache;
+		page = swapcache ? swapcache : sync_page;
 		goto out_page;
 	}
 
+	if (page == sync_page)
+		SetPageSwapCache(page);
 	if (mem_cgroup_try_charge_delay(page, vma->vm_mm, GFP_KERNEL,
 					&memcg, false)) {
+		if (page == sync_page)
+			ClearPageSwapCache(page);
 		ret = VM_FAULT_OOM;
 		goto out_page;
 	}
+	if (sync_page)
+		count_swapin_anon_cost(page, entry, memcg);
+	if (page == sync_page)
+		ClearPageSwapCache(page);
 
 	/*
 	 * Back out if somebody else already faulted in this pte.
@@ -3022,14 +3065,23 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 	vmf->orig_pte = pte;
 
 	/* ksm created a completely new copy */
-	if (unlikely(page != swapcache && swapcache)) {
+	if (unlikely(page != swapcache && page != sync_page)) {
 		page_add_new_anon_rmap(page, vma, vmf->address, false);
 		mem_cgroup_commit_charge(page, memcg, false, false);
 		lru_cache_add_active_or_unevictable(page, vma);
 	} else {
 		do_page_add_anon_rmap(page, vma, vmf->address, exclusive);
+		if (reclassify_swapin)
+			mem_cgroup_swapin_reclassify(page);
+		if (page == sync_page)
+			SetPageSwapCache(page);
 		mem_cgroup_commit_charge(page, memcg, true, false);
-		activate_page(page);
+		if (page == sync_page)
+			ClearPageSwapCache(page);
+		if (swapcache)
+			activate_page(page);
+		else
+			lru_cache_add_active_or_unevictable(page, vma);
 	}
 
 	swap_free(entry);
@@ -3048,6 +3100,10 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 		 */
 		unlock_page(swapcache);
 		put_page(swapcache);
+	}
+	if (sync_page && page != sync_page) {
+		unlock_page(sync_page);
+		put_page(sync_page);
 	}
 
 	if (vmf->flags & FAULT_FLAG_WRITE) {
@@ -3068,6 +3124,10 @@ out_nomap:
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
 out_page:
 	unlock_page(page);
+	if (sync_page && page != sync_page) {
+		unlock_page(sync_page);
+		put_page(sync_page);
+	}
 out_release:
 	put_page(page);
 	if (page != swapcache && swapcache) {

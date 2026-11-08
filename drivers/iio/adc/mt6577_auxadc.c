@@ -111,7 +111,7 @@ struct adc_cali_info {
 
 static struct adc_cali_info adc_cali;
 
-static void mt_auxadc_update_cali(struct device *dev)
+static int mt_auxadc_update_cali(struct device *dev)
 {
 	struct device_node *np = dev->of_node;
 #if IS_ENABLED(CONFIG_MTK_DEVINFO)
@@ -143,6 +143,9 @@ static void mt_auxadc_update_cali(struct device *dev)
 			goto err;
 		nvmem_dev = nvmem_device_get(dev, "mtk_efuse");
 		if (IS_ERR(nvmem_dev)) {
+			ret = PTR_ERR(nvmem_dev);
+			if (ret == -EPROBE_DEFER)
+				return ret;
 			dev_notice(dev, "failed to get mtk_efuse device\n");
 			goto err;
 		}
@@ -182,10 +185,11 @@ static void mt_auxadc_update_cali(struct device *dev)
 			adc_cali.cali_oe = adc_cali.efuse_oe - 512;
 		}
 
-		return;
+		return 0;
 	}
 err:
 	dev_notice(dev, "fail to get some dt info!\n");
+	return 0;
 }
 
 static int mt_auxadc_get_cali_data(int rawdata, bool enable_cali)
@@ -475,8 +479,11 @@ static int mt6577_auxadc_probe(struct platform_device *pdev)
 		goto err_disable_clk;
 	}
 
-	if (adc_dev->dev_comp->sample_data_cali)
-		mt_auxadc_update_cali(&pdev->dev);
+	if (adc_dev->dev_comp->sample_data_cali) {
+		ret = mt_auxadc_update_cali(&pdev->dev);
+		if (ret)
+			goto err_disable_clk;
+	}
 
 	mutex_init(&adc_dev->lock);
 
@@ -556,7 +563,8 @@ static void __exit mt6577_auxadc_exit(void)
 	platform_driver_unregister(&mt6577_auxadc_driver);
 }
 
-subsys_initcall(mt6577_auxadc_init);
+/* Run after built-in NVMEM providers, before device initcalls. */
+subsys_initcall_sync(mt6577_auxadc_init);
 module_exit(mt6577_auxadc_exit);
 
 MODULE_AUTHOR("Zhiyong Tao <zhiyong.tao@mediatek.com>");
