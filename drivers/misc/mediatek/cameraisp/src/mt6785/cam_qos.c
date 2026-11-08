@@ -510,9 +510,9 @@ int ISP_SetPMQOS(
 {
 	int Ret = 0;
 
-	if (module > ISP_IRQ_TYPE_INT_CAM_C_ST) {
+	if ((unsigned int)module > ISP_IRQ_TYPE_INT_CAM_C_ST) {
 		LOG_NOTICE("supported only to CAM_C\n");
-		return 1;
+		return -EINVAL;
 	}
 
 	switch (cmd) {
@@ -621,10 +621,10 @@ int SV_SetPMQOS(
 {
 	int Ret = 0;
 
-	if ((module < ISP_IRQ_TYPE_INT_CAMSV_0_ST) &&
+	if ((module < ISP_IRQ_TYPE_INT_CAMSV_0_ST) ||
 		(module > ISP_IRQ_TYPE_INT_CAMSV_5_ST)) {
 		LOG_NOTICE("supported only to SV0 to SV5\n");
-		return 1;
+		return -EINVAL;
 	}
 
 	switch (cmd) {
