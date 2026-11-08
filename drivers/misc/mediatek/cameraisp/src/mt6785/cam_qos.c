@@ -510,9 +510,9 @@ int ISP_SetPMQOS(
 {
 	int Ret = 0;
 
-	if (module > ISP_IRQ_TYPE_INT_CAM_C_ST) {
+	if ((unsigned int)module > ISP_IRQ_TYPE_INT_CAM_C_ST) {
 		LOG_NOTICE("supported only to CAM_C\n");
-		return 1;
+		return -EINVAL;
 	}
 
 	switch (cmd) {
@@ -578,10 +578,12 @@ int ISP_SetPMQOS(
 			LOG_DBG("1:DFS Clk_0:%d", pvalue[0]);
 			return 1;
 #else
-			u32 step, i = 0;
+			u32 step = 0, i;
 			u64 freq[ISP_CLK_LEVEL_CNT] = {0};
 
 			mtk_dfs_supported(freq, &step);
+			if (!step || step > ARRAY_SIZE(freq))
+				return 0;
 
 			for (i = 0; i < step; i++)
 				pvalue[i] = freq[i];
@@ -621,11 +623,17 @@ int SV_SetPMQOS(
 {
 	int Ret = 0;
 
-	if ((module < ISP_IRQ_TYPE_INT_CAMSV_0_ST) &&
+	if ((module < ISP_IRQ_TYPE_INT_CAMSV_0_ST) ||
 		(module > ISP_IRQ_TYPE_INT_CAMSV_5_ST)) {
 		LOG_NOTICE("supported only to SV0 to SV5\n");
-		return 1;
+		return -EINVAL;
 	}
+
+	/* CAMSV4 and CAMSV5 have no bandwidth ports on MT6785. */
+	if (module > ISP_IRQ_TYPE_INT_CAMSV_3_ST &&
+	    (cmd == E_BW_ADD || cmd == E_BW_REMOVE ||
+	     cmd == E_BW_UPDATE || cmd == E_BW_CLR))
+		return 0;
 
 	switch (cmd) {
 	case E_BW_REMOVE:
