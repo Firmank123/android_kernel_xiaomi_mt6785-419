@@ -627,6 +627,12 @@ int SV_SetPMQOS(
 		return -EINVAL;
 	}
 
+	/* CAMSV4 and CAMSV5 have no bandwidth ports on MT6785. */
+	if (module > ISP_IRQ_TYPE_INT_CAMSV_3_ST &&
+	    (cmd == E_BW_ADD || cmd == E_BW_REMOVE ||
+	     cmd == E_BW_UPDATE || cmd == E_BW_CLR))
+		return 0;
+
 	switch (cmd) {
 	case E_BW_REMOVE:
 		mtk_pmqos_remove(module);
