@@ -3076,15 +3076,14 @@ static inline void zone_statistics(struct zone *preferred_zone, struct zone *z)
 /* Remove page from the per-cpu list, caller must protect the list */
 static struct page *__rmqueue_pcplist(struct zone *zone, int migratetype,
 			struct per_cpu_pages *pcp,
-			gfp_t gfp_flags)
+			unsigned int alloc_flags)
 {
 	struct page *page = NULL;
 	struct list_head *list = NULL;
 
 	do {
 		/* First try to get CMA pages */
-		if (migratetype == MIGRATE_MOVABLE &&
-				gfp_flags & __GFP_CMA) {
+		if (alloc_flags & ALLOC_CMA) {
 			list = get_populated_pcp_list(zone, 0, pcp,
 					get_cma_migrate_type());
 		}
@@ -3112,7 +3111,7 @@ static struct page *__rmqueue_pcplist(struct zone *zone, int migratetype,
 /* Lock and remove page from the per-cpu list */
 static struct page *rmqueue_pcplist(struct zone *preferred_zone,
 			struct zone *zone, unsigned int order,
-			gfp_t gfp_flags, int migratetype)
+			unsigned int alloc_flags, int migratetype)
 {
 	struct per_cpu_pages *pcp;
 	struct page *page;
@@ -3120,8 +3119,7 @@ static struct page *rmqueue_pcplist(struct zone *preferred_zone,
 
 	local_irq_save(flags);
 	pcp = &this_cpu_ptr(zone->pageset)->pcp;
-	page = __rmqueue_pcplist(zone,  migratetype, pcp,
-				 gfp_flags);
+	page = __rmqueue_pcplist(zone, migratetype, pcp, alloc_flags);
 	if (page) {
 		__count_zid_vm_events(PGALLOC, page_zonenum(page), 1 << order);
 		zone_statistics(preferred_zone, zone);
@@ -3144,7 +3142,7 @@ struct page *rmqueue(struct zone *preferred_zone,
 
 	if (likely(order == 0)) {
 		page = rmqueue_pcplist(preferred_zone, zone, order,
-				gfp_flags, migratetype);
+				alloc_flags, migratetype);
 		goto out;
 	}
 
@@ -3164,8 +3162,7 @@ struct page *rmqueue(struct zone *preferred_zone,
 				trace_mm_page_alloc_zone_locked(page, order, migratetype);
 		}
 
-		if (!page && migratetype == MIGRATE_MOVABLE &&
-				gfp_flags & __GFP_CMA)
+		if (!page && (alloc_flags & ALLOC_CMA))
 			page = __rmqueue_cma(zone, order);
 
 		if (!page)
@@ -3606,6 +3603,17 @@ void warn_alloc(gfp_t gfp_mask, nodemask_t *nodemask, const char *fmt, ...)
 	warn_alloc_show_mem(gfp_mask, nodemask);
 }
 
+static inline unsigned int
+gfp_to_alloc_flags_cma(gfp_t gfp_mask, unsigned int alloc_flags)
+{
+	if (IS_ENABLED(CONFIG_CMA) && (gfp_mask & __GFP_CMA) &&
+	    !(current->flags & PF_MEMALLOC_NOCMA) &&
+	    gfpflags_to_migratetype(gfp_mask) == MIGRATE_MOVABLE)
+		alloc_flags |= ALLOC_CMA;
+
+	return alloc_flags;
+}
+
 static inline struct page *
 __alloc_pages_cpuset_fallback(gfp_t gfp_mask, unsigned int order,
 			      unsigned int alloc_flags,
@@ -3613,6 +3621,7 @@ __alloc_pages_cpuset_fallback(gfp_t gfp_mask, unsigned int order,
 {
 	struct page *page;
 
+	alloc_flags = gfp_to_alloc_flags_cma(gfp_mask, alloc_flags);
 	page = get_page_from_freelist(gfp_mask, order,
 			alloc_flags|ALLOC_CPUSET, ac);
 	/*
@@ -3638,6 +3647,7 @@ __alloc_pages_may_oom(gfp_t gfp_mask, unsigned int order,
 		.order = order,
 	};
 	struct page *page;
+	unsigned int alloc_flags;
 
 	*did_some_progress = 0;
 
@@ -3658,9 +3668,11 @@ __alloc_pages_may_oom(gfp_t gfp_mask, unsigned int order,
 	 * attempt shall not depend on __GFP_DIRECT_RECLAIM && !__GFP_NORETRY
 	 * allocation which will never fail due to oom_lock already held.
 	 */
+	alloc_flags = gfp_to_alloc_flags_cma(gfp_mask,
+					    ALLOC_WMARK_HIGH | ALLOC_CPUSET);
 	page = get_page_from_freelist((gfp_mask | __GFP_HARDWALL) &
 				      ~__GFP_DIRECT_RECLAIM, order,
-				      ALLOC_WMARK_HIGH|ALLOC_CPUSET, ac);
+				      alloc_flags, ac);
 	if (page)
 		goto out;
 
@@ -4067,11 +4079,7 @@ gfp_to_alloc_flags(gfp_t gfp_mask)
 	} else if (unlikely(rt_task(current)) && !in_interrupt())
 		alloc_flags |= ALLOC_HARDER;
 
-#ifdef CONFIG_CMA
-	if (gfpflags_to_migratetype(gfp_mask) == MIGRATE_MOVABLE)
-		alloc_flags |= ALLOC_CMA;
-#endif
-	return alloc_flags;
+	return gfp_to_alloc_flags_cma(gfp_mask, alloc_flags);
 }
 
 static bool oom_reserves_allowed(struct task_struct *tsk)
@@ -4387,7 +4395,7 @@ retry:
 
 	reserve_flags = __gfp_pfmemalloc_flags(gfp_mask);
 	if (reserve_flags)
-		alloc_flags = reserve_flags;
+		alloc_flags = gfp_to_alloc_flags_cma(gfp_mask, reserve_flags);
 
 	/*
 	 * Reset the nodemask and zonelist iterators if memory policies can be
@@ -4469,7 +4477,7 @@ retry:
 
 	/* Avoid allocations with no watermarks from looping endlessly */
 	if (tsk_is_oom_victim(current) &&
-	    (alloc_flags == ALLOC_OOM ||
+	    ((alloc_flags & ALLOC_OOM) ||
 	     (gfp_mask & __GFP_NOMEMALLOC)))
 		goto nopage;
 
@@ -4561,8 +4569,7 @@ static inline bool prepare_alloc_pages(gfp_t gfp_mask, unsigned int order,
 	if (should_fail_alloc_page(gfp_mask, order))
 		return false;
 
-	if (IS_ENABLED(CONFIG_CMA) && ac->migratetype == MIGRATE_MOVABLE)
-		*alloc_flags |= ALLOC_CMA;
+	*alloc_flags = gfp_to_alloc_flags_cma(gfp_mask, *alloc_flags);
 
 	return true;
 }
