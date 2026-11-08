@@ -5543,15 +5543,6 @@ void cmdq_core_initialize(void)
 		}
 	}
 
-	/* pre-allocate delay CPR SRAM area */
-	{
-		status = cmdq_core_alloc_sram_buffer(CMDQ_DELAY_MAX_SET *
-			CMDQ_DELAY_SET_MAX_CPR * sizeof(u32),
-			"Delay CPR", &cmdq_ctx.delay_cpr_start);
-		if (status < 0)
-			CMDQ_ERR("Allocate delay CPR failed status:%d\n",
-				status);
-	}
 	/* allocate shared memory */
 	cmdq_ctx.hSecSharedMem = NULL;
 #ifdef CMDQ_SECURE_PATH_SUPPORT
