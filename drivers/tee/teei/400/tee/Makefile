@@ -10,14 +10,14 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU General Public License for more details.
 
-obj-y += tee.o
-tee-objs += tee_core.o
-tee-objs += tee_shm.o
-tee-objs += tee_shm_pool.o
-tee-objs += tee_client_api.o
+obj-y += isee_tee.o
+isee_tee-objs += tee_core.o
+isee_tee-objs += tee_shm.o
+isee_tee-objs += tee_shm_pool.o
+isee_tee-objs += tee_client_api.o
 
 ifeq ($(CONFIG_MICROTRUST_TEST_DRIVERS),y)
-tee-objs += capi_proxy.o
+isee_tee-objs += capi_proxy.o
 endif
 
 obj-y += soter/
