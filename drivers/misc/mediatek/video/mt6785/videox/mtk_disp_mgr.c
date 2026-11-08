@@ -1507,18 +1507,20 @@ int _ioctl_wait_self_refresh_trigger(unsigned long arg)
 	/* reset status & wake-up threads which wait for repainting */
 	DISPMSG("[REPAINT] HWC waits for repaint\n");
 
-	/*  wait for repaint */
-	ret = wait_event_interruptible(repaint_wq,
-			!list_empty(&repaint_job_queue));
-	if (ret < 0) {
-		DISP_PR_ERR("[REPAINT] wait_event unexpectedly, ret:%d\n", ret);
-		return ret;
-	}
+	for (;;) {
+		ret = wait_event_interruptible(repaint_wq,
+				!list_empty(&repaint_job_queue));
+		if (ret < 0)
+			return ret;
 
-	/* retrieve first repaint_job_t from queue */
-	mutex_lock(&repaint_queue_lock);
-	repaint_job = list_first_entry(&repaint_job_queue,
-		struct repaint_job_t, link);
+		/* Another waiter may have dequeued the job after we woke. */
+		mutex_lock(&repaint_queue_lock);
+		repaint_job = list_first_entry_or_null(&repaint_job_queue,
+			struct repaint_job_t, link);
+		if (repaint_job)
+			break;
+		mutex_unlock(&repaint_queue_lock);
+	}
 	type = repaint_job->type;
 
 	/* remove from queue & add repaint_job_t in pool */
