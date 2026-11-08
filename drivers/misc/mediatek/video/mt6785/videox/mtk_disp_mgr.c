@@ -1478,6 +1478,7 @@ void trigger_repaint(int type)
 			repaint_job = kzalloc(sizeof(struct repaint_job_t),
 				GFP_KERNEL);
 			if (IS_ERR_OR_NULL(repaint_job)) {
+				mutex_unlock(&repaint_queue_lock);
 				disp_aee_print("allocate repaint_job_t fail\n");
 				return;
 			}
