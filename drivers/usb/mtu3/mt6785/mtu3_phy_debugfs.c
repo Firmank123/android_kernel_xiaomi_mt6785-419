@@ -657,7 +657,7 @@ int mtu3_phy_init_debugfs(struct phy *phy)
 	struct proc_dir_entry *file;
 	int ret;
 
-	proc_mkdir("mtk_usb", NULL);
+	proc_mkdir_shared("mtk_usb");
 
 	root = proc_mkdir("mtk_usb/usb20_phy", NULL);
 	if (!root) {

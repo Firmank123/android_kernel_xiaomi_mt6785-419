@@ -23,6 +23,7 @@ extern struct proc_dir_entry *proc_symlink(const char *,
 		struct proc_dir_entry *, const char *);
 struct proc_dir_entry *_proc_mkdir(const char *, umode_t, struct proc_dir_entry *, void *, bool);
 extern struct proc_dir_entry *proc_mkdir(const char *, struct proc_dir_entry *);
+struct proc_dir_entry *proc_mkdir_shared(const char *name);
 extern struct proc_dir_entry *proc_mkdir_data(const char *, umode_t,
 					      struct proc_dir_entry *, void *);
 extern struct proc_dir_entry *proc_mkdir_mode(const char *, umode_t,
@@ -94,6 +95,10 @@ static inline struct proc_dir_entry *proc_symlink(const char *name,
 		struct proc_dir_entry *parent,const char *dest) { return NULL;}
 static inline struct proc_dir_entry *proc_mkdir(const char *name,
 	struct proc_dir_entry *parent) {return NULL;}
+static inline struct proc_dir_entry *proc_mkdir_shared(const char *name)
+{
+	return NULL;
+}
 static inline struct proc_dir_entry *proc_create_mount_point(const char *name) { return NULL; }
 static inline struct proc_dir_entry *_proc_mkdir(const char *name, umode_t mode,
 		struct proc_dir_entry *parent, void *data, bool force_lookup)

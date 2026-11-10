@@ -360,17 +360,23 @@ static const struct inode_operations proc_dir_inode_operations = {
 	.setattr	= proc_notify_change,
 };
 
-/* returns the registered entry, or frees dp and returns NULL on failure */
-struct proc_dir_entry *proc_register(struct proc_dir_entry *dir,
-		struct proc_dir_entry *dp)
+static struct proc_dir_entry *__proc_register(struct proc_dir_entry *dir,
+		struct proc_dir_entry *dp, bool shared)
 {
+	struct proc_dir_entry *existing = NULL;
+
 	if (proc_alloc_inum(&dp->low_ino))
 		goto out_free_entry;
 
 	write_lock(&proc_subdir_lock);
 	dp->parent = dir;
 	if (pde_subdir_insert(dir, dp) == false) {
-		WARN(1, "proc_dir_entry '%s/%s' already registered\n",
+		if (shared) {
+			existing = pde_subdir_find(dir, dp->name, dp->namelen);
+			if (existing->proc_iops != &proc_dir_inode_operations)
+				existing = NULL;
+		}
+		WARN(!existing, "proc_dir_entry '%s/%s' already registered\n",
 		     dir->name, dp->name);
 		write_unlock(&proc_subdir_lock);
 		goto out_free_inum;
@@ -383,7 +389,14 @@ out_free_inum:
 	proc_free_inum(dp->low_ino);
 out_free_entry:
 	pde_free(dp);
-	return NULL;
+	return existing;
+}
+
+/* returns the registered entry, or frees dp and returns NULL on failure */
+struct proc_dir_entry *proc_register(struct proc_dir_entry *dir,
+		struct proc_dir_entry *dp)
+{
+	return __proc_register(dir, dp, false);
 }
 
 static struct proc_dir_entry *__proc_create(struct proc_dir_entry **parent,
@@ -476,8 +489,9 @@ struct proc_dir_entry *proc_symlink(const char *name,
 }
 EXPORT_SYMBOL(proc_symlink);
 
-struct proc_dir_entry *_proc_mkdir(const char *name, umode_t mode,
-		struct proc_dir_entry *parent, void *data, bool force_lookup)
+static struct proc_dir_entry *proc_mkdir_internal(const char *name, umode_t mode,
+		struct proc_dir_entry *parent, void *data, bool force_lookup,
+		bool shared)
 {
 	struct proc_dir_entry *ent;
 
@@ -492,11 +506,30 @@ struct proc_dir_entry *_proc_mkdir(const char *name, umode_t mode,
 		if (force_lookup) {
 			pde_force_lookup(ent);
 		}
-		ent = proc_register(parent, ent);
+		ent = __proc_register(parent, ent, shared);
 	}
 	return ent;
 }
+
+struct proc_dir_entry *_proc_mkdir(const char *name, umode_t mode,
+		struct proc_dir_entry *parent, void *data, bool force_lookup)
+{
+	return proc_mkdir_internal(name, mode, parent, data, force_lookup, false);
+}
 EXPORT_SYMBOL_GPL(_proc_mkdir);
+
+/*
+ * Share a top-level directory whose users only remove their own children.
+ * Callers must keep the directory registered for the lifetime of procfs.
+ */
+struct proc_dir_entry *proc_mkdir_shared(const char *name)
+{
+	if (WARN_ON_ONCE(strchr(name, '/')))
+		return NULL;
+
+	return proc_mkdir_internal(name, 0, NULL, NULL, false, true);
+}
+EXPORT_SYMBOL_GPL(proc_mkdir_shared);
 
 struct proc_dir_entry *proc_mkdir_data(const char *name, umode_t mode,
 		struct proc_dir_entry *parent, void *data)
