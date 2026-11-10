@@ -5009,16 +5009,12 @@ static void usbpd_mi_vdm_received_cb(struct tcp_ny_uvdm uvdm)
 		}
 		break;
 	case USBPD_UVDM_SESSION_SEED:
-		for (i = 0; i < USBPD_UVDM_SS_LEN; i++) {
+		for (i = 0; i < USBPD_UVDM_SS_LEN; i++)
 			pinfo->pd_adapter->vdm_data.s_secert[i] = uvdm.uvdm_data[i+1];
-			pr_info("usbpd s_secert uvdm.uvdm_data[%d]=0x%x", i+1, uvdm.uvdm_data[i+1]);
-		}
 		break;
 	case USBPD_UVDM_AUTHENTICATION:
-		for (i = 0; i < USBPD_UVDM_SS_LEN; i++) {
+		for (i = 0; i < USBPD_UVDM_SS_LEN; i++)
 			pinfo->pd_adapter->vdm_data.digest[i] = uvdm.uvdm_data[i+1];
-			pr_info("usbpd digest[%d]=0x%x", i+1, uvdm.uvdm_data[i+1]);
-		}
 		break;
 	default:
 		break;
