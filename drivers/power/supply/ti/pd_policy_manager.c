@@ -1237,7 +1237,8 @@ static void usbpd_get_pps_status_max(struct usbpd_pm *pdpm)
 			TCPM_POWER_CAP_APDO_TYPE_PPS,
 			&cap_idx, &apdo_cap);
 		if (ret != TCP_DPM_RET_SUCCESS) {
-			pr_err("inquire pd apdo fail(%d)\n", ret);
+			if (ret != TCPM_ERROR_NOT_FOUND)
+				pr_err("inquire pd apdo fail(%d)\n", ret);
 			break;
 		}
 
@@ -1637,10 +1638,10 @@ static void usbpd_pps_non_verified_contact(struct usbpd_pm *pdpm, bool connected
 
 static void cp_psy_change_work(struct work_struct *work)
 {
-	struct usbpd_pm *pdpm = container_of(work, struct usbpd_pm,
-					cp_psy_change_work);
 	pr_debug("%s enter.\n", __func__);
 #if 0
+	struct usbpd_pm *pdpm = container_of(work, struct usbpd_pm,
+					cp_psy_change_work);
 	union power_supply_propval val = {0,};
 	bool ac_pres = pdpm->cp.vbus_pres;
 	int ret;
