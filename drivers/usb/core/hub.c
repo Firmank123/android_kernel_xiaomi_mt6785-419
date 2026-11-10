@@ -1345,7 +1345,8 @@ static void hub_quiesce(struct usb_hub *hub, enum hub_quiescing_type type)
 	}
 
 	/* Stop hub_wq and related activity */
-	flush_delayed_work(&hub->init_work);
+	if (hub->init_work.work.func)
+		flush_delayed_work(&hub->init_work);
 	usb_kill_urb(hub->urb);
 	if (hub->has_indicators)
 		cancel_delayed_work_sync(&hub->leds);

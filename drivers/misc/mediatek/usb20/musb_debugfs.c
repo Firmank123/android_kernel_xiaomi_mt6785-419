@@ -598,7 +598,7 @@ int musb_init_debugfs(struct musb *musb)
 {
 	int ret, idx = 0;
 
-	proc_mkdir(PROC_DIR_MTK_USB, NULL);
+	proc_mkdir_shared(PROC_DIR_MTK_USB);
 
 	proc_files[idx] = proc_create_data(PROC_FILE_REGDUMP, 0444,
 			NULL, &musb_regdump_fops, musb);
@@ -766,7 +766,7 @@ void musb_dr_debugfs_init(struct musb *musb)
 {
 	int idx = 0;
 
-	proc_mkdir(PROC_DIR_MTK_USB, NULL);
+	proc_mkdir_shared(PROC_DIR_MTK_USB);
 
 	proc_dr_files[idx++] = proc_create_data(PROC_FILE_MODE, 0644,
 			NULL, &musb_mode_fops, musb);

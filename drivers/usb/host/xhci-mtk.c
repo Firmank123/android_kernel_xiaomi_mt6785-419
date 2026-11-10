@@ -13,6 +13,7 @@
 #include <linux/kernel.h>
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
@@ -79,10 +80,10 @@
 #define HOST_CMD_TEST_PACKET        0x4
 #define PMSC_PORT_TEST_CTRL_OFFSET  28
 
-/*procfs node*/
-#define PROC_FILES_NUM 1
-static struct proc_dir_entry *proc_files[PROC_FILES_NUM] = {
-	NULL};
+/* The testmode path exposes one controller at a time. */
+static DEFINE_MUTEX(testmode_lock);
+static struct proc_dir_entry *testmode_entry;
+static struct xhci_hcd_mtk *testmode_owner;
 
 enum ssusb_uwk_vers {
 	SSUSB_UWK_V1 = 1,
@@ -192,24 +193,35 @@ static const struct file_operations testmode_fops = {
 
 static void xhci_mtk_dbg_init(struct xhci_hcd_mtk *mtk)
 {
-	u8 idx = 0;
+	struct proc_dir_entry *root;
 
-	proc_mkdir("mtk_usb", NULL);
+	mutex_lock(&testmode_lock);
+	if (testmode_owner)
+		goto out;
 
-	proc_files[idx] = proc_create_data("mtk_usb/testmode", 0644, NULL, &testmode_fops, mtk);
-	if (!proc_files[idx])
-		pr_info("%s: fail to create testmode node in procfs\n", __func__);
-	idx++;
+	root = proc_mkdir_shared("mtk_usb");
+	if (!root)
+		goto out;
+
+	testmode_entry = proc_create_data("testmode", 0644, root,
+					  &testmode_fops, mtk);
+	if (testmode_entry)
+		testmode_owner = mtk;
+	else
+		dev_info(mtk->dev, "failed to create testmode in procfs\n");
+out:
+	mutex_unlock(&testmode_lock);
 }
 
 static void xhci_mtk_dbg_exit(struct xhci_hcd_mtk *mtk)
 {
-	u8 idx = 0;
-
-	for (; idx < PROC_FILES_NUM; idx++) {
-		if (proc_files[idx])
-			proc_remove(proc_files[idx]);
+	mutex_lock(&testmode_lock);
+	if (testmode_owner == mtk) {
+		proc_remove(testmode_entry);
+		testmode_entry = NULL;
+		testmode_owner = NULL;
 	}
+	mutex_unlock(&testmode_lock);
 }
 
 static int xhci_mtk_host_enable(struct xhci_hcd_mtk *mtk)
@@ -732,6 +744,8 @@ static int xhci_mtk_remove(struct platform_device *dev)
 	struct xhci_hcd	*xhci = hcd_to_xhci(hcd);
 	struct usb_hcd  *shared_hcd = xhci->shared_hcd;
 
+	xhci_mtk_dbg_exit(mtk);
+
 	pm_runtime_put_noidle(&dev->dev);
 	pm_runtime_disable(&dev->dev);
 
@@ -745,8 +759,6 @@ static int xhci_mtk_remove(struct platform_device *dev)
 	xhci_mtk_sch_exit(mtk);
 	xhci_mtk_clks_disable(mtk);
 	xhci_mtk_ldos_disable(mtk);
-	xhci_mtk_dbg_exit(mtk);
-
 	return 0;
 }
 

@@ -589,6 +589,26 @@ out:
 	return dentry;
 }
 
+static int binder_freeze_feature_show(struct seq_file *m, void *unused)
+{
+	seq_puts(m, "1\n");
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(binder_freeze_feature);
+
+static int init_binder_features(struct super_block *sb)
+{
+	struct dentry *dir, *dentry;
+
+	dir = binderfs_create_dir(sb->s_root, "features");
+	if (IS_ERR(dir))
+		return PTR_ERR(dir);
+
+	dentry = binderfs_create_file(dir, "freeze_notification",
+				     &binder_freeze_feature_fops, NULL);
+	return PTR_ERR_OR_ZERO(dentry);
+}
+
 static int init_binder_logs(struct super_block *sb)
 {
 	struct dentry *binder_logs_root_dir, *dentry, *proc_log_dir;
@@ -729,6 +749,10 @@ static int binderfs_fill_super(struct super_block *sb, void *data, int silent)
 		if (*name == ',')
 			name++;
 	}
+
+	ret = init_binder_features(sb);
+	if (ret)
+		return ret;
 
 	if (info->mount_opts.stats_mode == STATS_GLOBAL)
 		return init_binder_logs(sb);

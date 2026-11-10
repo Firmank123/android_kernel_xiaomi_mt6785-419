@@ -956,11 +956,13 @@ static int u2_phy_procfs_exit(struct mtk_phy_instance *instance)
 
 static int mtk_phy_procfs_init(struct mtk_tphy *tphy)
 {
-	struct proc_dir_entry *root = NULL;
+	struct proc_dir_entry *root;
 
-	proc_mkdir("mtk_usb", NULL);
+	root = proc_mkdir_shared("mtk_usb");
+	if (!root)
+		return -ENOMEM;
 
-	root = proc_mkdir("mtk_usb/usb-phy0", NULL);
+	root = proc_mkdir("usb-phy0", root);
 	if (!root) {
 		dev_info(tphy->dev, "failed to creat usb-phy0  dir\n");
 		return -ENOMEM;

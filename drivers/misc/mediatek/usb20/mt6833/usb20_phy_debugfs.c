@@ -664,7 +664,7 @@ int usb20_phy_init_debugfs(void)
 	struct proc_dir_entry *file;
 	int ret;
 
-	proc_mkdir("mtk_usb", NULL);
+	proc_mkdir_shared("mtk_usb");
 
 	root = proc_mkdir("mtk_usb/usb20_phy", NULL);
 	if (!root) {

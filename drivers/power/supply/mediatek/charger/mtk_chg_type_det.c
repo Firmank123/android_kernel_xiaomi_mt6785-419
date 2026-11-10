@@ -697,7 +697,8 @@ static int mt_usb_get_property(struct power_supply *psy,
 			}
 		}
 		//val->intval = mtk_chg->usb_desc.type;
-		pr_err("%s  %d  POWER_SUPPLY_PROP_REAL_TYPE: mtk_chg->chg_type=%d pd_active=%d real_type=%d\n", __func__, __LINE__, mtk_chg->chg_type, mtk_chg->cti->pd_active, val->intval);
+		pr_debug("POWER_SUPPLY_PROP_REAL_TYPE: chg_type=%d pd_online=%d real_type=%d\n",
+			 mtk_chg->chg_type, pd_online, val->intval);
 		break;
     case POWER_SUPPLY_PROP_HVDCP3_TYPE:
 		val->intval = HVDCP3_NONE;

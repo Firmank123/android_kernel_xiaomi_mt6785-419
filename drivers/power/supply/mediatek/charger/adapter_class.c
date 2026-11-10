@@ -485,7 +485,6 @@ static ssize_t request_vdm_cmd_store(struct device *dev,
 	//unsigned char data[32];
 	unsigned char *data;
 	unsigned int count;
-	int i;
 
 	if (in_interrupt()) {
 		data = kmalloc(40, GFP_ATOMIC);
@@ -497,13 +496,9 @@ static ssize_t request_vdm_cmd_store(struct device *dev,
 	memset(data, 0, 40);
 
 	ret = sscanf(buf, "%d,%s\n", &cmd, buffer);
-	pr_info("%s:cmd:%d, buffer:%s\n", __func__, cmd, buffer);
 
 	StringToHex(buffer, data, &count);
-	pr_info("%s:count = %d\n", __func__, count);
-
-	for (i = 0; i < count; i++)
-		pr_info("%02x", data[i]);
+	pr_debug("%s: cmd=%d, bytes=%u\n", __func__, cmd, count);
 
 	if (adapter_dev != NULL && adapter_dev->ops != NULL &&
 	    adapter_dev->ops->request_vdm_cmd) {

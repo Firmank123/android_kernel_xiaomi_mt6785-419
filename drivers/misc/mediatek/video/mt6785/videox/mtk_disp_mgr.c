@@ -1483,7 +1483,7 @@ void trigger_repaint(int type)
 				return;
 			}
 			INIT_LIST_HEAD(&repaint_job->link);
-			DISPMSG("[REPAINT] allocate a new repaint_job_t\n");
+			DISPDBG("[REPAINT] allocate a new repaint_job_t\n");
 		}
 
 		/* init & insert repaint_job_t into queue */
@@ -1491,8 +1491,8 @@ void trigger_repaint(int type)
 		list_add_tail(&repaint_job->link, &repaint_job_queue);
 		mutex_unlock(&repaint_queue_lock);
 
-		DISPMSG("[REPAINT] insert repaint_job in queue, type:%d\n",
-				type);
+		DISPDBG("[REPAINT] insert repaint_job in queue, type:%d\n",
+			type);
 		wake_up_interruptible(&repaint_wq);
 	}
 }
@@ -1505,7 +1505,7 @@ int _ioctl_wait_self_refresh_trigger(unsigned long arg)
 	struct repaint_job_t *repaint_job;
 
 	/* reset status & wake-up threads which wait for repainting */
-	DISPMSG("[REPAINT] HWC waits for repaint\n");
+	DISPDBG("[REPAINT] HWC waits for repaint\n");
 
 	for (;;) {
 		ret = wait_event_interruptible(repaint_wq,
@@ -1528,7 +1528,7 @@ int _ioctl_wait_self_refresh_trigger(unsigned long arg)
 	list_add_tail(&repaint_job->link, &repaint_job_pool);
 	mutex_unlock(&repaint_queue_lock);
 
-	DISPMSG("[REPAINT] trigger repaint, type: %d\n", type);
+	DISPDBG("[REPAINT] trigger repaint, type: %d\n", type);
 	if (copy_to_user(argp, &type, sizeof(unsigned int))) {
 		DISP_PR_ERR("[FB]: copy to user failed! line:%d\n", __LINE__);
 		ret = -EFAULT;

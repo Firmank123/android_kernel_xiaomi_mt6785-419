@@ -231,16 +231,12 @@ static void usbpd_mi_vdm_received_cb(struct mtk_pd_adapter_info *info,
 		}
 		break;
 	case USBPD_UVDM_SESSION_SEED:
-		for (i = 0; i < USBPD_UVDM_SS_LEN; i++) {
+		for (i = 0; i < USBPD_UVDM_SS_LEN; i++)
 			info->adapter_dev->vdm_data.s_secert[i] = uvdm.uvdm_data[i+1];
-			pr_info("usbpd s_secert uvdm.uvdm_data[%d]=0x%x", i+1, uvdm.uvdm_data[i+1]);
-		}
 		break;
 	case USBPD_UVDM_AUTHENTICATION:
-		for (i = 0; i < USBPD_UVDM_SS_LEN; i++) {
+		for (i = 0; i < USBPD_UVDM_SS_LEN; i++)
 			info->adapter_dev->vdm_data.digest[i] = uvdm.uvdm_data[i+1];
-			pr_info("usbpd digest[%d]=0x%x", i+1, uvdm.uvdm_data[i+1]);
-		}
 		break;
 	default:
 		break;
@@ -811,23 +807,13 @@ void charToint(char *str, int input_len, unsigned int *out, unsigned int *outlen
 				str[i*4]);
 		*outlen = *outlen + 1;
 	}
-
-	pr_info("%s: outlen = %d\n", __func__, *outlen);
-	for (i = 0; i < *outlen; i++)
-		pr_info("%s: out[%d] = %08x\n", __func__, i, out[i]);
-	pr_info("%s: char to int done.\n", __func__);
 }
 
 static int tcp_dpm_event_cb_uvdm(struct tcpc_device *tcpc, int ret,
 				 struct tcp_dpm_event *event)
 {
-	int i;
-	struct tcp_dpm_custom_vdm_data vdm_data = event->tcp_dpm_data.vdm_data;
-
-	pr_info("%s: vdm_data.cnt = %d\n", __func__, vdm_data.cnt);
-	for (i = 0; i < vdm_data.cnt; i++)
-		chr_info("%s vdm_data.vdos[%d] = 0x%08x", __func__, i,
-			vdm_data.vdos[i]);
+	pr_debug("%s: status=%d, words=%u\n", __func__, ret,
+		 event->tcp_dpm_data.vdm_data.cnt);
 	return 0;
 }
 
@@ -893,7 +879,6 @@ static int pd_request_vdm_cmd(struct adapter_device *dev,
 
 		for (i = 0; i < USBPD_UVDM_VERIFIED_LEN; i++)
 			vdm_data->vdos[i + 1] = int_data[i];
-		pr_info("verify-0: %08x\n", vdm_data->vdos[1]);
 
 		rc = tcpm_dpm_send_custom_vdm(info->tcpc, vdm_data, &cb_data);//&tcp_dpm_evt_cb_null
 		if (rc < 0) {
@@ -907,9 +892,6 @@ static int pd_request_vdm_cmd(struct adapter_device *dev,
 		vdm_data->cnt = 1 + USBPD_UVDM_SS_LEN;
 		for (i = 0; i < USBPD_UVDM_SS_LEN; i++)
 			vdm_data->vdos[i + 1] = int_data[i];
-
-		for (i = 0; i < USBPD_UVDM_SS_LEN; i++)
-			pr_info("%08x\n", vdm_data->vdos[i+1]);
 
 		rc = tcpm_dpm_send_custom_vdm(info->tcpc, vdm_data, &cb_data);//&tcp_dpm_evt_cb_null
 		if (rc < 0) {
