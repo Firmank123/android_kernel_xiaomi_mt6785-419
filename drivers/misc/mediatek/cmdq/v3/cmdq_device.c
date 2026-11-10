@@ -363,6 +363,20 @@ void cmdq_dev_init_event_table(struct device_node *node)
 		cmdq_dev_get_event_value_by_name(node, events[i].event,
 			events[i].dts_name);
 	}
+
+#if IS_ENABLED(CONFIG_MACH_MT6779)
+	/* MT6779 camera event IDs from the GCE binding. */
+	if (cmdq_core_get_event_value(CMDQ_EVENT_FDVT_DONE) < 0)
+		cmdq_core_set_event_table(CMDQ_EVENT_FDVT_DONE, 449);
+	if (cmdq_core_get_event_value(CMDQ_EVENT_FE_DONE) < 0)
+		cmdq_core_set_event_table(CMDQ_EVENT_FE_DONE, 450);
+	if (cmdq_core_get_event_value(CMDQ_EVENT_RSC_EOF) < 0)
+		cmdq_core_set_event_table(CMDQ_EVENT_RSC_EOF, 451);
+	if (cmdq_core_get_event_value(CMDQ_EVENT_DVS_DONE_ASYNC_SHOT) < 0)
+		cmdq_core_set_event_table(CMDQ_EVENT_DVS_DONE_ASYNC_SHOT, 452);
+	if (cmdq_core_get_event_value(CMDQ_EVENT_DVP_DONE_ASYNC_SHOT) < 0)
+		cmdq_core_set_event_table(CMDQ_EVENT_DVP_DONE_ASYNC_SHOT, 453);
+#endif
 }
 
 void cmdq_dev_test_dts_correctness(void)

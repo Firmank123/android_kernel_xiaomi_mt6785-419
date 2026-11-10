@@ -1598,7 +1598,9 @@ static signed int ConfigFDVTHW(FDVT_Config *pFdvtConfig)
 	}
 
 	cmdqRecWrite(handle, FDVT_START_HW, 0x1, CMDQ_REG_MASK);
-	cmdqRecWait(handle, CMDQ_EVENT_FDVT_DONE);
+	/* Without a GCE event, ISP_Irq_FDVT completes the frame. */
+	if (cmdq_core_get_event_value(CMDQ_EVENT_FDVT_DONE) >= 0)
+		cmdqRecWait(handle, CMDQ_EVENT_FDVT_DONE);
 	cmdqRecWrite(handle, FDVT_START_HW, 0x0, CMDQ_REG_MASK);
 #endif
 	/* non-blocking API, Please  use cmdqRecFlushAsync() */
