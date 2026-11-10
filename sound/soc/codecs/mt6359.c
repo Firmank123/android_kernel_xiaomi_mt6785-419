@@ -2957,7 +2957,8 @@ static int mt_vow_aud_lpw_event(struct snd_soc_dapm_widget *w,
 					   0x0331, 0x0000);
 		} else {
 			/* handset mic R or L */
-			if (priv->vow_single_mic_select == MIC_INDEX_THIRD)
+			if (priv->vow_single_mic_select == MIC_INDEX_THIRD ||
+			    priv->vow_single_mic_select == MIC_INDEX_REF)
 				regmap_update_bits(priv->regmap, MT6359_AUDENC_ANA_CON4,
 						   0x0331, 0x0000);
 			/* handset single mic (L) or headset mic mode*/
