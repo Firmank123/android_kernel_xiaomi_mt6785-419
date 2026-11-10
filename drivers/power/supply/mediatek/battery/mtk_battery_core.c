@@ -2416,16 +2416,13 @@ void fg_sw_bat_cycle_accu(void)
 
 	diff_car = fg_coulomb - gm.bat_cycle_car;
 
-	if (diff_car > 0) {
-		bm_err("[%s]ERROR!drop diff_car\n", __func__);
-		gm.bat_cycle_car = fg_coulomb;
-	} else {
+	/* Count discharged capacity towards the cycle threshold. */
+	if (diff_car <= 0)
 		gm.bat_cycle_ncar = gm.bat_cycle_ncar + abs(diff_car);
-		gm.bat_cycle_car = fg_coulomb;
-	}
+	gm.bat_cycle_car = fg_coulomb;
 
 	gauge_dev_get_hw_status(gm.gdev, &gm.hw_status, 0);
-	bm_err("[%s]car[o:%d n:%d],diff_car:%d,ncar[o:%d n:%d hw:%d] thr %d\n",
+	bm_debug("[%s]car[o:%d n:%d],diff_car:%d,ncar[o:%d n:%d hw:%d] thr %d\n",
 		__func__,
 		tmp_car, fg_coulomb, diff_car,
 		tmp_ncar, gm.bat_cycle_ncar, gm.gdev->fg_hw_info.ncar,

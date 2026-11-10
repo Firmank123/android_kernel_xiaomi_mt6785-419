@@ -201,11 +201,11 @@ static int pd_get_batt_current_thermal_level(struct usbpd_pm *pdpm, int *level)
 	rc = power_supply_get_property(pdpm->sw_psy,
 				POWER_SUPPLY_PROP_CHARGE_CONTROL_LIMIT, &pval);
 	if (rc < 0) {
-		pr_info("Couldn't get fastcharge mode:%d\n", rc);
+		pr_info("Couldn't get charge control limit: %d\n", rc);
 		return rc;
 	}
 
-	pr_err("pval.intval: %d\n", pval.intval);
+	pr_debug("pval.intval: %d\n", pval.intval);
 	*level = pval.intval;
 
 	return rc;
@@ -227,7 +227,7 @@ static bool pd_get_fastcharge_mode_enabled(struct usbpd_pm *pdpm)
 		return false;
 	}
 
-	pr_err("fastcharge mode: %d\n", pval.intval);
+	pr_debug("fastcharge mode: %d\n", pval.intval);
 
 	if (pval.intval == 1)
 		return true;
@@ -253,7 +253,7 @@ static bool pd_disable_cp_by_jeita_status(struct usbpd_pm *pdpm)
 	if (!rc)
 		bq_input_suspend = !!pval.intval;
 
-	pr_err("bq_input_suspend: %d\n", bq_input_suspend);
+	pr_debug("bq_input_suspend: %d\n", bq_input_suspend);
 
 	/* is input suspend is set true, do not allow bq quick charging */
 	if (bq_input_suspend)
@@ -270,7 +270,7 @@ static bool pd_disable_cp_by_jeita_status(struct usbpd_pm *pdpm)
 	}
 
 	batt_temp = pval.intval;
-	pr_err("batt_temp: %d\n", batt_temp);
+	pr_debug("batt_temp: %d\n", batt_temp);
 
 	bat_constant_voltage = pm_config.bat_volt_lp_lmt;
 	is_fastcharge_mode = pd_get_fastcharge_mode_enabled(pdpm);
