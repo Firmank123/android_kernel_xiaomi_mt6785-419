@@ -1232,7 +1232,7 @@ unsigned int lcm_fps_ctx_get(struct lcm_fps_ctx_t *fps_ctx)
 		lcm_fps_ctx_init(fps_ctx);
 
 	if (fps_ctx->num <= 3) {
-		DISPMSG("%s num is %d which is < 3, so return fix fps",
+		DISPDBG("%s num is %d which is <= 3, so return fix fps\n",
 			__func__, fps_ctx->num);
 		if (primary_display_is_idle() &&
 			fps_ctx->dsi_mode == 1)
@@ -5526,7 +5526,6 @@ int primary_display_resume(void)
 		/* pgc->state = DISP_ALIVE; */
 		goto done;
 	}
-	DISP_PR_INFO("[DENNIS][%s][%d]\n", __func__, __LINE__);
 	if (disp_helper_get_option(DISP_OPT_CV_BYSUSPEND)) {
 		int dsi_force_config = 0;
 
@@ -5545,7 +5544,6 @@ int primary_display_resume(void)
 	primary_display_init_multi_cfg_info();
 	in_fps = out_fps = primary_display_get_default_disp_fps(0);
 	pgc->first_cfg = 1;
-	DISP_PR_INFO("[DENNIS][%s][%d]\n", __func__, __LINE__);
 	DISPMSG("%s,g_force_cfg=%d,g_force_cfg_id=%d\n",
 		__func__, g_force_cfg, g_force_cfg_id);
 
@@ -5680,13 +5678,11 @@ int primary_display_resume(void)
 		dpmgr_path_ioctl(pgc->dpmgr_handle, NULL,
 				 DDP_OVL_GOLDEN_SETTING, &io_gs);
 	}
-	DISP_PR_INFO("[DENNIS][%s][%d]\n", __func__, __LINE__);
 	DISPCHECK("[POWER]dpmanager re-init[end]\n");
 	mmprofile_log_ex(ddp_mmp_get_events()->primary_resume,
 			 MMPROFILE_FLAG_PULSE, 0, 3);
 
 	skip_update = primary_display_lcm_power_on_state(0);
-	DISP_PR_INFO("[DENNIS][%s][%d]\n", __func__, __LINE__);
 	mmprofile_log_ex(ddp_mmp_get_events()->primary_resume,
 			 MMPROFILE_FLAG_PULSE, 0, 4);
 	if (dpmgr_path_is_busy(pgc->dpmgr_handle)) {

@@ -10,6 +10,11 @@
 #include "ddp_debug.h"
 #ifdef CONFIG_MTK_AEE_FEATURE
 #include "mt-plat/aee.h"
+#define disp_aee_warning_api(...) aee_kernel_warning_api(__VA_ARGS__)
+#define disp_aee_exception(...) aee_kernel_exception(__VA_ARGS__)
+#else
+#define disp_aee_warning_api(...) do { } while (0)
+#define disp_aee_exception(...) do { } while (0)
 #endif
 
 #define DISP_LOG_PRINT(level, sub_module, fmt, args...)			\
@@ -105,16 +110,11 @@
 
 #define DISPPR_HWOP(string, args...)
 
-#ifndef CONFIG_MTK_AEE_FEATURE
-# define aee_kernel_warning_api(...)
-# define aee_kernel_exception(...)
-#endif
-
 #define disp_aee_print(string, args...)					\
 	do {								\
 		char disp_name[100];					\
 		snprintf(disp_name, 100, "[DISP]"string, ##args);	\
-		aee_kernel_warning_api(__FILE__, __LINE__,		\
+		disp_aee_warning_api(__FILE__, __LINE__,			\
 				DB_OPT_DEFAULT | DB_OPT_MMPROFILE_BUFFER | \
 				DB_OPT_DISPLAY_HANG_DUMP | DB_OPT_DUMP_DISPLAY,\
 				disp_name, "[DISP] error"string, ##args); \
@@ -124,7 +124,7 @@
 # define disp_aee_db_print(string, args...)				\
 	do {								\
 		pr_err("DISP error:"string, ##args);			\
-		aee_kernel_exception("DISP", "[DISP]error:%s, %d\n",	\
+		disp_aee_exception("DISP", "[DISP]error:%s, %d\n",	\
 					__FILE__, __LINE__);		\
 	} while (0)
 
