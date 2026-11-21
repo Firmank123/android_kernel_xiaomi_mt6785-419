@@ -6631,23 +6631,42 @@ static int select_idle_sibling(struct task_struct *p, int prev, int target)
 int find_best_idle_cpu(struct task_struct *p, bool prefer_idle)
 {
 	int i;
+	int prev_cpu = task_cpu(p);
 	int best_idle_cpu = -1;
 	struct cpumask *tsk_cpus_allow = &p->cpus_allowed;
-	int min_cap = capacity_orig_of(0);
-	int prefer_big = prefer_idle && (task_util(p) > min_cap);
+	unsigned long min_cap = capacity_orig_of(0);
+	unsigned long task_util_clamped = uclamp_task_util(p);
+	bool prefer_big = prefer_idle &&
+		(task_util_clamped * capacity_margin > min_cap * 1024);
+	unsigned long best_cap = 0;
+	unsigned int min_exit_lat = UINT_MAX;
 	struct perf_order_domain *domain;
-	struct list_head *pos;
 
 	if (!pod_is_ready())
 		return best_idle_cpu;
 
-	list_for_each(pos, &perf_order_domains) {
-		domain = list_entry(pos, struct perf_order_domain,
-					perf_order_domains);
+	if (cpu_online(prev_cpu) &&
+	    cpumask_test_cpu(prev_cpu, tsk_cpus_allow) &&
+	    idle_cpu(prev_cpu) &&
+	    (!prefer_big ||
+	     capacity_orig_of(prev_cpu) * 1024 >=
+	     task_util_clamped * capacity_margin)) {
+#ifdef CONFIG_MTK_SCHED_INTEROP
+		if (!cpu_rq(prev_cpu)->rt.rt_nr_running ||
+		    unlikely(is_rt_throttle(prev_cpu)))
+#endif
+			return prev_cpu;
+	}
+
+	rcu_read_lock();
+	for_each_perf_domain_ascending(domain) {
 		for_each_cpu(i, &domain->possible_cpus) {
+			unsigned long cpu_cap;
+			struct cpuidle_state *idle;
+			unsigned int exit_lat;
 
 			/* tsk with prefer idle to find bigger idle cpu */
-			if (!cpu_online(i) || 
+			if (!cpu_online(i) ||
 					!cpumask_test_cpu(i, tsk_cpus_allow))
 				continue;
 
@@ -6660,16 +6679,33 @@ int find_best_idle_cpu(struct task_struct *p, bool prefer_idle)
 			/* favoring tasks that prefer idle cpus
 			 * to improve latency.
 			 */
-			if (idle_cpu(i)) {
+			if (!idle_cpu(i))
+				continue;
+
+			cpu_cap = capacity_orig_of(i);
+			idle = idle_get_state(cpu_rq(i));
+			exit_lat = idle ? idle->exit_latency : 0;
+
+			if (prefer_big && cpu_cap > best_cap) {
+				best_cap = cpu_cap;
+				min_exit_lat = exit_lat;
 				best_idle_cpu = i;
-				if (!prefer_big)
-					goto find_idle_cpu;
+				continue;
+			}
+
+			if (best_idle_cpu == -1 || exit_lat < min_exit_lat) {
+				min_exit_lat = exit_lat;
+				best_idle_cpu = i;
+				if (exit_lat == 0 && !prefer_big)
+					goto unlock;
 			}
 		}
 
+		if (best_idle_cpu >= 0 && !prefer_big)
+			break;
 	}
-
-find_idle_cpu:
+unlock:
+	rcu_read_unlock();
 
 	return best_idle_cpu;
 }
@@ -6741,7 +6777,7 @@ int select_max_spare_capacity(struct task_struct *p, int target)
 		if (idle_cpu(cpu))
 			return cpu;
 
-		new_usage = cpu_util(cpu) + task_util(p);
+		new_usage = cpu_util(cpu) + uclamp_task_util(p);
 
 		if (new_usage >= capacity_of(cpu))
 			spare_cap = 0;
@@ -6766,7 +6802,7 @@ static int
 ___select_idle_sibling(struct task_struct *p, int prev_cpu, int new_cpu)
 {
 	if (sched_feat(SCHED_MTK_EAS)) {
-#ifdef CONFIG_SCHED_TUNE
+#if defined(CONFIG_SCHED_TUNE) || defined(CONFIG_UCLAMP_TASK)
 		bool prefer_idle = uclamp_latency_sensitive(p) > 0;
 #else
 		bool prefer_idle = true;
