@@ -91,6 +91,7 @@ static unsigned int gp_prev_gpu_pwr_limit;
 static unsigned int gp_curr_gpu_pwr_limit;
 
 static DEFINE_MUTEX(apthermolmt_cpu_mutex);
+static DEFINE_MUTEX(apthermolmt_gpu_mutex);
 
 /*=============================================================
  * Weak functions
@@ -134,19 +135,25 @@ int apthermolmt_register_user(struct apthermolmt_user *handle, char *log)
 	if (!handle || !log)
 		return -1;
 
+	mutex_lock(&apthermolmt_cpu_mutex);
+	mutex_lock(&apthermolmt_gpu_mutex);
 	for (; i < AP_THERMO_LMT_MAX_USERS; i++) {
 		if (_users[i] == &_dummy) {
-			_users[i] = handle;
 			handle->log = log;
 			handle->cpu_limit = 0x7FFFFFFF;
 			handle->vpu_limit = 0x7FFFFFFF;
 			handle->mdla_limit = 0x7FFFFFFF;
 			handle->gpu_limit = 0x7FFFFFFF;
 			handle->ptr = &_users[i];
+			_users[i] = handle;
+			mutex_unlock(&apthermolmt_gpu_mutex);
+			mutex_unlock(&apthermolmt_cpu_mutex);
 			return 0;
 		}
 	}
 
+	mutex_unlock(&apthermolmt_gpu_mutex);
+	mutex_unlock(&apthermolmt_cpu_mutex);
 	return -1;
 }
 EXPORT_SYMBOL(apthermolmt_register_user);
@@ -158,14 +165,20 @@ int apthermolmt_unregister_user(struct apthermolmt_user *handle)
 	if (!handle)
 		return -1;
 
+	mutex_lock(&apthermolmt_cpu_mutex);
+	mutex_lock(&apthermolmt_gpu_mutex);
 	for (; i < AP_THERMO_LMT_MAX_USERS; i++) {
 		if (handle->ptr == &_users[i]) {
 			_users[i] = &_dummy;
 			handle->ptr = NULL;
+			mutex_unlock(&apthermolmt_gpu_mutex);
+			mutex_unlock(&apthermolmt_cpu_mutex);
 			return 0;
 		}
 	}
 
+	mutex_unlock(&apthermolmt_gpu_mutex);
+	mutex_unlock(&apthermolmt_cpu_mutex);
 	return -1;
 }
 EXPORT_SYMBOL(apthermolmt_unregister_user);
@@ -175,13 +188,12 @@ struct apthermolmt_user *handle, unsigned int limit)
 {
 	unsigned int final_limit;
 
+	mutex_lock(&apthermolmt_cpu_mutex);
 	if (!handle || !(handle->ptr))
-		return;
+		goto out_unlock;
 
 	/* decide min CPU limit */
 	handle->cpu_limit = limit;
-
-	mutex_lock(&apthermolmt_cpu_mutex);
 
 #if AP_THERMO_LMT_MAX_USERS == 5
 	final_limit = MIN(_users[0]->cpu_limit, _users[1]->cpu_limit);
@@ -215,6 +227,7 @@ struct apthermolmt_user *handle, unsigned int limit)
 						apthermolmt_curr_cpu_pwr_lim);
 	}
 
+out_unlock:
 	mutex_unlock(&apthermolmt_cpu_mutex);
 }
 EXPORT_SYMBOL(apthermolmt_set_cpu_power_limit);
@@ -325,8 +338,9 @@ struct apthermolmt_user *handle, unsigned int limit)
 {
 	unsigned int final_limit;
 
+	mutex_lock(&apthermolmt_gpu_mutex);
 	if (!handle || !(handle->ptr))
-		return;
+		goto out_unlock;
 
 	/* decide min GPU limit */
 	handle->gpu_limit = limit;
@@ -351,6 +365,9 @@ struct apthermolmt_user *handle, unsigned int limit)
 		mt_gpufreq_thermal_protect((final_limit != 0x7FFFFFFF) ?
 							final_limit : 0);
 	}
+
+out_unlock:
+	mutex_unlock(&apthermolmt_gpu_mutex);
 }
 EXPORT_SYMBOL(apthermolmt_set_gpu_power_limit);
 

@@ -18,6 +18,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 
+#include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/printk.h>
@@ -27,6 +28,7 @@
 #include "mt-plat/mtk_thermal_monitor.h"
 #include <tscpu_settings.h>
 #include "mtk_gpufreq.h"
+#include "ap_thermal_limit.h"
 
 
 #define mtk_cooler_gpu_dprintk(fmt, args...)	\
@@ -36,6 +38,8 @@ static struct thermal_cooling_device
 *cl_gpu_dev = { 0 };
 static unsigned int g_cl_id;
 static unsigned int g_gpu_level;
+static struct apthermolmt_user gpu_limit_user;
+static char gpu_limit_name[] = "mtk-cl-gpu";
 
 static int mtk_cl_gpu_get_max_state
 (struct thermal_cooling_device *cdev, unsigned long *state)
@@ -64,7 +68,8 @@ static int mtk_cl_gpu_set_cur_state
 				mtk_gpu_power[g_gpu_level + gpu_max_opp].gpufreq_power);
 		}
 
-		mt_gpufreq_thermal_protect((g_gpu_level == 0) ? 0 :
+		apthermolmt_set_gpu_power_limit(&gpu_limit_user,
+			g_gpu_level == 0 ? INT_MAX :
 			mtk_gpu_power[g_gpu_level + gpu_max_opp].gpufreq_power);
 	} else {
 		mtk_cooler_gpu_dprintk("%s: mtk_gpu_power_table=%p, state=%lu, GPU_OPP=%d\n",
@@ -107,8 +112,15 @@ static int mtk_cooler_gpu_register_ltf(void)
 
 	g_cl_id = 0;
 	cl_gpu_dev = mtk_thermal_cooling_device_register
-		("mtk-cl-gpu", (void *)&g_cl_id,
-		 &mtk_cl_gpu_ops);
+		(gpu_limit_name, &g_cl_id, &mtk_cl_gpu_ops);
+	if (IS_ERR(cl_gpu_dev)) {
+		int ret = PTR_ERR(cl_gpu_dev);
+
+		cl_gpu_dev = NULL;
+		return ret;
+	}
+	if (!cl_gpu_dev)
+		return -ENODEV;
 
 	return 0;
 }
@@ -125,22 +137,24 @@ static void mtk_cooler_gpu_unregister_ltf(void)
 
 static int __init mtk_cooler_gpu_init(void)
 {
-	int err = 0;
+	int err;
+
+	err = apthermolmt_register_user(&gpu_limit_user, gpu_limit_name);
+	if (err)
+		return -ENOSPC;
 
 	err = mtk_cooler_gpu_register_ltf();
 	if (err)
-		goto err_unreg;
+		apthermolmt_unregister_user(&gpu_limit_user);
 
-	return 0;
-
-err_unreg:
-	mtk_cooler_gpu_unregister_ltf();
 	return err;
 }
 
 static void __exit mtk_cooler_gpu_exit(void)
 {
 	mtk_cooler_gpu_unregister_ltf();
+	apthermolmt_set_gpu_power_limit(&gpu_limit_user, INT_MAX);
+	apthermolmt_unregister_user(&gpu_limit_user);
 }
 module_init(mtk_cooler_gpu_init);
 module_exit(mtk_cooler_gpu_exit);
