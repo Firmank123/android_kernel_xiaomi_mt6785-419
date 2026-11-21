@@ -7457,7 +7457,7 @@ static void select_cpu_candidates(struct sched_domain *sd, cpumask_t *cpus,
 	bool boosted = uclamp_boosted(p);
 	unsigned long target_cap = boosted ? 0 : ULONG_MAX;
 	unsigned long highest_spare_cap = 0;
-	unsigned int min_exit_lat = UINT_MAX;
+	unsigned int min_exit_lat = UINT_MAX, exit_lat;
 	int cpu, max_spare_cap_cpu;
 	struct cpuidle_state *idle;
 
@@ -7510,12 +7510,12 @@ static void select_cpu_candidates(struct sched_domain *sd, cpumask_t *cpus,
 					continue;
 
 				idle = idle_get_state(cpu_rq(cpu));
-				if (idle && idle->exit_latency > min_exit_lat &&
-						cpu_cap == target_cap)
+				exit_lat = idle ? idle->exit_latency : 0;
+				if (cpu_cap == target_cap &&
+				    exit_lat >= min_exit_lat)
 					continue;
 
-				if (idle)
-					min_exit_lat = idle->exit_latency;
+				min_exit_lat = exit_lat;
 				target_cap = cpu_cap;
 				best_idle_cpu = cpu;
 			} else if (spare_cap > highest_spare_cap) {
