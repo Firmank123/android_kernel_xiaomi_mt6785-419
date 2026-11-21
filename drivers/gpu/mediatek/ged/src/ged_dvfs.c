@@ -1465,7 +1465,7 @@ static bool ged_dvfs_policy(
 				g_lb_down_count = 4;
 		} else if (ui32GPULoading_avg >=
 			loading_ud_table[ui32GPUFreq].up) {
-			i32NewFreqID -= 1;
+			i32NewFreqID = max(0, i32NewFreqID - 2);
 			g_lb_down_count = 1;
 		} else if (ui32GPULoading_avg <=
 			loading_ud_table[ui32GPUFreq].down) {
