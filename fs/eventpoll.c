@@ -1768,26 +1768,27 @@ static int ep_poll(struct eventpoll *ep, struct epoll_event __user *events,
 	} else if (timeout) {
 		/*
 		 * Avoid the unnecessary trip to the wait queue loop, if the
-		 * caller specified a non blocking operation. We still need
-		 * lock because we could race and not see an epi being added
-		 * to the ready list while in irq callback. Thus incorrectly
-		 * returning 0 back to userspace.
+		 * caller specified a non blocking operation.
 		 */
 		timed_out = 1;
-
-		spin_lock_irq(&ep->wq.lock);
+		/*
+		 * This call is racy: we may or may not see events that are
+		 * being added to the ready list under the lock (e.g., in IRQ
+		 * callbacks). For cases with a zero timeout, the user by
+		 * definition is opportunistically polling and will have to
+		 * recheck again.
+		 */
 		eavail = ep_events_available(ep);
-		spin_unlock_irq(&ep->wq.lock);
-
 		goto check_events;
 	}
 
 fetch_events:
 
-	if (!ep_events_available(ep))
-		ep_busy_loop(ep, timed_out);
-
 	eavail = ep_events_available(ep);
+	if (!eavail) {
+		ep_busy_loop(ep, timed_out);
+		eavail = ep_events_available(ep);
+	}
 	if (eavail)
 		goto check_events;
 
