@@ -1561,16 +1561,22 @@ static int ufs_mtk_pre_link(struct ufs_hba *hba)
 static void ufs_mtk_setup_clk_gating(struct ufs_hba *hba)
 {
 	unsigned long flags;
-	u32 delay;
+	u32 delay = 10;
+	u32 ah_scale, ah_timer;
+	static const u32 scale_us[] = {1, 10, 100, 1000, 10000, 100000};
 
 	if (ufshcd_is_clkgating_allowed(hba)) {
-		if (ufshcd_is_auto_hibern8_supported(hba) && hba->ahit)
-			delay = FIELD_GET(UFSHCI_AHIBERN8_TIMER_MASK,
-					  hba->ahit) + 5;
-		else
-			delay = 15;
+		if (ufshcd_is_auto_hibern8_supported(hba) && hba->ahit) {
+			ah_scale = FIELD_GET(UFSHCI_AHIBERN8_SCALE_MASK,
+					     hba->ahit);
+			ah_timer = FIELD_GET(UFSHCI_AHIBERN8_TIMER_MASK,
+					     hba->ahit);
+			if (ah_scale < ARRAY_SIZE(scale_us))
+				delay = ah_timer * scale_us[ah_scale] / 1000;
+		}
+
 		spin_lock_irqsave(hba->host->host_lock, flags);
-		hba->clk_gating.delay_ms = delay;
+		hba->clk_gating.delay_ms = max_t(u32, delay, 10);
 		spin_unlock_irqrestore(hba->host->host_lock, flags);
 	}
 }
