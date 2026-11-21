@@ -1034,27 +1034,35 @@ err_get_alloc_mutex_failed:
 	return LRU_SKIP;
 }
 
+#define BINDER_SHRINK_MIN_PAGES 64
+
 static unsigned long
 binder_shrink_count(struct shrinker *shrink, struct shrink_control *sc)
 {
 	unsigned long ret = list_lru_count(&binder_alloc_lru);
-	return ret;
+
+	return ret > BINDER_SHRINK_MIN_PAGES ?
+		ret - BINDER_SHRINK_MIN_PAGES : 0;
 }
 
 static unsigned long
 binder_shrink_scan(struct shrinker *shrink, struct shrink_control *sc)
 {
-	unsigned long ret;
+	unsigned long count = list_lru_count(&binder_alloc_lru);
+	unsigned long nr_to_scan;
 
-	ret = list_lru_walk(&binder_alloc_lru, binder_alloc_free_page,
-			    NULL, sc->nr_to_scan);
-	return ret;
+	if (count <= BINDER_SHRINK_MIN_PAGES)
+		return SHRINK_STOP;
+
+	nr_to_scan = min(sc->nr_to_scan, count - BINDER_SHRINK_MIN_PAGES);
+	return list_lru_walk(&binder_alloc_lru, binder_alloc_free_page,
+			     NULL, nr_to_scan);
 }
 
 static struct shrinker binder_shrinker = {
 	.count_objects = binder_shrink_count,
 	.scan_objects = binder_shrink_scan,
-	.seeks = DEFAULT_SEEKS,
+	.seeks = DEFAULT_SEEKS * 4,
 };
 
 void binder_alloc_shrinker_exit(void)
