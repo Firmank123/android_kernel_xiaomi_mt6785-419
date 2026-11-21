@@ -182,6 +182,7 @@ static int __do_register_ext_module(struct goodix_ext_module *module)
 	}
 
 	list_add(&module->list, insert_point->prev);
+	atomic_inc(&goodix_modules.mod_count);
 	mutex_unlock(&goodix_modules.mutex);
 
 	ts_info("Module [%s] registered,priority:%u", module->name,
@@ -230,6 +231,7 @@ static void goodix_core_module_init(void)
 	INIT_LIST_HEAD(&goodix_modules.head);
 	mutex_init(&goodix_modules.mutex);
 	init_completion(&goodix_modules.core_comp);
+	atomic_set(&goodix_modules.mod_count, 0);
 }
 
 /**
@@ -309,6 +311,7 @@ int goodix_unregister_all_module(void)
 		}
 		ts_info("remove module: %s", ext_module->name);
 		list_del(&ext_module->list);
+		atomic_dec(&goodix_modules.mod_count);
 	}
 	mutex_unlock(&goodix_modules.mutex);
 	return ret;
@@ -357,6 +360,7 @@ int goodix_unregister_ext_module(struct goodix_ext_module *module)
 	}
 
 	list_del(&module->list);
+	atomic_dec(&goodix_modules.mod_count);
 	mutex_unlock(&goodix_modules.mutex);
 
 	if (module->funcs && module->funcs->exit)
@@ -1538,18 +1542,20 @@ static irqreturn_t goodix_ts_threadirq_func(int irq, void *data)
 
 	core_data->irq_trig_cnt++;
 	/* inform external module */
-	mutex_lock(&goodix_modules.mutex);
-	list_for_each_entry_safe(ext_module, next,
-				 &goodix_modules.head, list) {
-		if (!ext_module->funcs->irq_event)
-			continue;
-		r = ext_module->funcs->irq_event(core_data, ext_module);
-		if (r == EVT_CANCEL_IRQEVT) {
-			mutex_unlock(&goodix_modules.mutex);
-			return IRQ_HANDLED;
+	if (unlikely(atomic_read(&goodix_modules.mod_count) > 0)) {
+		mutex_lock(&goodix_modules.mutex);
+		list_for_each_entry_safe(ext_module, next,
+					 &goodix_modules.head, list) {
+			if (!ext_module->funcs->irq_event)
+				continue;
+			r = ext_module->funcs->irq_event(core_data, ext_module);
+			if (r == EVT_CANCEL_IRQEVT) {
+				mutex_unlock(&goodix_modules.mutex);
+				return IRQ_HANDLED;
+			}
 		}
+		mutex_unlock(&goodix_modules.mutex);
 	}
-	mutex_unlock(&goodix_modules.mutex);
 
 	/* read touch data from touch device */
 	r = ts_dev->hw_ops->event_handler(ts_dev, ts_event);
