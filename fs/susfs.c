@@ -33,9 +33,9 @@ extern int susfs_get_non_sus_mnt_id_from_mnt(struct mount *orig_mnt);
 extern struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *vfsmnt);
 
 #ifdef CONFIG_KSU_SUSFS_ENABLE_LOG
-DEFINE_STATIC_KEY_TRUE(susfs_is_log_enabled);
-#define SUSFS_LOGI(fmt, ...) if (static_branch_likely(&susfs_is_log_enabled)) pr_info("susfs:[%u][%d][%s] " fmt, current_uid().val, current->pid, __func__, ##__VA_ARGS__)
-#define SUSFS_LOGE(fmt, ...) if (static_branch_likely(&susfs_is_log_enabled)) pr_err("susfs:[%u][%d][%s]" fmt, current_uid().val, current->pid, __func__, ##__VA_ARGS__)
+DEFINE_STATIC_KEY_FALSE(susfs_is_log_enabled);
+#define SUSFS_LOGI(fmt, ...) if (static_branch_unlikely(&susfs_is_log_enabled)) pr_info("susfs:[%u][%d][%s] " fmt, current_uid().val, current->pid, __func__, ##__VA_ARGS__)
+#define SUSFS_LOGE(fmt, ...) if (static_branch_unlikely(&susfs_is_log_enabled)) pr_err("susfs:[%u][%d][%s]" fmt, current_uid().val, current->pid, __func__, ##__VA_ARGS__)
 #else
 #define SUSFS_LOGI(fmt, ...)
 #define SUSFS_LOGE(fmt, ...)
@@ -43,6 +43,7 @@ DEFINE_STATIC_KEY_TRUE(susfs_is_log_enabled);
 
 /* sus_path */
 #ifdef CONFIG_KSU_SUSFS_SUS_PATH
+DEFINE_STATIC_KEY_FALSE(susfs_has_sus_paths);
 DEFINE_STATIC_SRCU(susfs_srcu_sus_path_loop);
 static DEFINE_MUTEX(susfs_mutex_lock_sus_path);
 static LIST_HEAD(LH_SUS_PATH_LOOP);
@@ -92,6 +93,8 @@ void susfs_add_sus_path(void __user **user_info) {
 				info.target_pathname, inode->i_ino, inode->i_state);
 	info.err = 0;
 out_path_put_path:
+	if (!info.err)
+		static_branch_enable(&susfs_has_sus_paths);
 	path_put(&path);
 out_copy_to_user:
 	if (copy_to_user(&((struct st_susfs_sus_path __user*)*user_info)->err, &info.err, sizeof(info.err))) {
@@ -126,6 +129,7 @@ void susfs_add_sus_path_loop(void __user **user_info) {
 	mutex_lock(&susfs_mutex_lock_sus_path);
 	list_add_tail_rcu(&new_list->list, &LH_SUS_PATH_LOOP);
 	mutex_unlock(&susfs_mutex_lock_sus_path);
+	static_branch_enable(&susfs_has_sus_paths);
 	SUSFS_LOGI("target_pathname: '%s', is successfully added to LH_SUS_PATH_LOOP\n", new_list->target_pathname);
 	info.err = 0;
 out_copy_to_user:
@@ -140,8 +144,14 @@ static void susfs_run_sus_path_loop(void) {
 	struct path path;
 	struct inode *inode;
 	struct fuse_inode *fi = NULL;
-	const struct cred *saved = override_creds(ksu_cred);
-	int srcu_idx = srcu_read_lock(&susfs_srcu_sus_path_loop);
+	const struct cred *saved;
+	int srcu_idx;
+
+	if (!static_branch_unlikely(&susfs_has_sus_paths))
+		return;
+
+	saved = override_creds(ksu_cred);
+	srcu_idx = srcu_read_lock(&susfs_srcu_sus_path_loop);
 
 	list_for_each_entry_rcu(cursor, &LH_SUS_PATH_LOOP, list) {
 		if (!kern_path(cursor->target_pathname, 0, &path))
@@ -189,7 +199,9 @@ bool susfs_is_inode_sus_path(struct inode *inode)
 #endif
 {
 	struct fuse_inode *fi = NULL;
-	if (!susfs_is_current_proc_umounted_app()) {
+	if (!static_branch_unlikely(&susfs_has_sus_paths) ||
+	    !susfs_is_current_proc_umounted_app() ||
+	    !susfs_is_current_app_uid()) {
 		return false;
 	}
 	if (!inode->i_mapping) {
@@ -1234,16 +1246,18 @@ static int copy_config_to_buf(const char *config_string, char *buf_ptr, size_t *
 }
 
 void susfs_get_enabled_features(void __user **user_info) {
-	struct st_susfs_enabled_features *info = (struct st_susfs_enabled_features *)kzalloc(sizeof(struct st_susfs_enabled_features), GFP_KERNEL);
+	struct st_susfs_enabled_features __user *out = *user_info;
+	struct st_susfs_enabled_features *info = kzalloc(sizeof(*info), GFP_KERNEL);
 	char *buf_ptr = NULL;
 	size_t copied_size = 0;
 
 	if (!info) {
-		info->err = -ENOMEM;
-		goto out_copy_to_user;
+		if (put_user(-ENOMEM, &out->err))
+			SUSFS_LOGE("Failed to return enabled features error\n");
+		return;
 	}
 
-	if (copy_from_user(info, (struct st_susfs_enabled_features __user*)*user_info, sizeof(struct st_susfs_enabled_features))) {
+	if (copy_from_user(info, out, sizeof(*info))) {
 		info->err = -EFAULT;
 		goto out_copy_to_user;
 	}
@@ -1298,13 +1312,11 @@ void susfs_get_enabled_features(void __user **user_info) {
 
 	info->err = 0;
 out_copy_to_user:
-	if (copy_to_user((struct st_susfs_enabled_features __user*)*user_info, info, sizeof(struct st_susfs_enabled_features))) {
+	if (copy_to_user(out, info, sizeof(*info))) {
 		info->err = -EFAULT;
 	}
 	SUSFS_LOGI("CMD_SUSFS_SHOW_ENABLED_FEATURES -> ret: %d\n", info->err);
-	if (info) {
-		kfree(info);
-	}
+	kfree(info);
 }
 
 /* show_variant */
