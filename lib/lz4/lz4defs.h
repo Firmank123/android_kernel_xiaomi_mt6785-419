@@ -37,6 +37,7 @@
 
 #include <asm/unaligned.h>
 #include <linux/string.h>	 /* memset, memcpy */
+#include <linux/lz4.h>
 
 #define FORCE_INLINE __always_inline
 
@@ -80,6 +81,7 @@ typedef uintptr_t uptrval;
  * without overflowing output buffer
  */
 #define MATCH_SAFEGUARD_DISTANCE  ((2 * WILDCOPYLENGTH) - MINMATCH)
+#define FASTLOOP_SAFE_DISTANCE 64
 
 /* Increase this value ==> compression run slower on incompressible data */
 #define LZ4_SKIPTRIGGER 6
@@ -91,7 +93,7 @@ typedef uintptr_t uptrval;
 #define GB (1U << 30)
 
 #define MAXD_LOG 16
-#define MAX_DISTANCE ((1 << MAXD_LOG) - 1)
+#define MAX_DISTANCE LZ4_DISTANCE_MAX
 #define STEPSIZE sizeof(size_t)
 
 #define ML_BITS	4
@@ -147,6 +149,17 @@ static FORCE_INLINE void LZ4_writeLE16(void *memPtr, U16 value)
  */
 #define LZ4_memcpy(dst, src, size) __builtin_memcpy(dst, src, size)
 #define LZ4_memmove(dst, src, size) __builtin_memmove(dst, src, size)
+#define LZ4_memset(p, v, s) __builtin_memset((p), (v), (s))
+#define MEM_INIT(p, v, s) LZ4_memset((p), (v), (s))
+
+#ifndef LZ4_FAST_DEC_LOOP
+#  if defined(__i386__) || defined(__x86_64__) || \
+      defined(__aarch64__) || defined(CONFIG_ARM64)
+#    define LZ4_FAST_DEC_LOOP 1
+#  else
+#    define LZ4_FAST_DEC_LOOP 0
+#  endif
+#endif
 
 static FORCE_INLINE void LZ4_copy8(void *dst, const void *src)
 {
