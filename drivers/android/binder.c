@@ -445,6 +445,8 @@ enum binder_deferred_state {
  * struct binder_priority - scheduler policy and priority
  * @sched_policy            scheduler policy
  * @prio                    [100..139] for SCHED_NORMAL, [0..99] for FIFO/RT
+ * @uclamp_min              minimum utilization clamp value
+ * @uclamp_saved_user_defined whether saved uclamp_min was user-defined
  *
  * The binder driver supports inheriting the following scheduler policies:
  * SCHED_NORMAL
@@ -455,6 +457,8 @@ enum binder_deferred_state {
 struct binder_priority {
 	unsigned int sched_policy;
 	int prio;
+	unsigned int uclamp_min;
+	bool uclamp_saved_user_defined;
 };
 
 /**
@@ -1183,6 +1187,74 @@ static int to_kernel_prio(int policy, int user_priority)
 		return MAX_USER_RT_PRIO - 1 - user_priority;
 }
 
+static void binder_save_uclamp_min(struct task_struct *task,
+				   struct binder_priority *prio)
+{
+#ifdef CONFIG_UCLAMP_TASK
+	prio->uclamp_saved_user_defined =
+		task->uclamp_req[UCLAMP_MIN].user_defined;
+	prio->uclamp_min = prio->uclamp_saved_user_defined ?
+		task->uclamp_req[UCLAMP_MIN].value : 0;
+#else
+	prio->uclamp_min = 0;
+	prio->uclamp_saved_user_defined = false;
+#endif
+}
+
+#ifdef CONFIG_UCLAMP_TASK
+static unsigned int binder_clamp_uclamp_min(struct task_struct *task,
+					    unsigned int uclamp_min)
+{
+	return min_t(unsigned int, uclamp_min,
+		     task->uclamp_req[UCLAMP_MAX].value);
+}
+#endif
+
+static bool binder_uclamp_needs_update(struct task_struct *task,
+				       struct binder_priority desired,
+				       bool verify)
+{
+#ifdef CONFIG_UCLAMP_TASK
+	unsigned int target_min;
+
+	if (verify) {
+		target_min = binder_clamp_uclamp_min(task, desired.uclamp_min);
+		return target_min > sched_uclamp_min_get(task);
+	}
+
+	if (!desired.uclamp_saved_user_defined)
+		return task->uclamp_req[UCLAMP_MIN].user_defined;
+
+	target_min = binder_clamp_uclamp_min(task, desired.uclamp_min);
+	return !task->uclamp_req[UCLAMP_MIN].user_defined ||
+		task->uclamp_req[UCLAMP_MIN].value != target_min;
+#else
+	return false;
+#endif
+}
+
+static void binder_apply_uclamp_min(struct task_struct *task,
+				    struct binder_priority desired,
+				    bool verify)
+{
+#ifdef CONFIG_UCLAMP_TASK
+	struct sched_attr attr = {
+		.sched_flags = SCHED_FLAG_KEEP_ALL | SCHED_FLAG_UTIL_CLAMP_MIN,
+	};
+
+	if (!binder_uclamp_needs_update(task, desired, verify))
+		return;
+
+	if (!verify && !desired.uclamp_saved_user_defined) {
+		sched_uclamp_min_reset(task);
+		return;
+	}
+
+	attr.sched_util_min = binder_clamp_uclamp_min(task, desired.uclamp_min);
+	sched_setattr_nocheck(task, &attr);
+#endif
+}
+
 static void binder_do_set_priority(struct task_struct *task,
 				   struct binder_priority desired,
 				   bool verify)
@@ -1190,60 +1262,69 @@ static void binder_do_set_priority(struct task_struct *task,
 	int priority; /* user-space prio value */
 	bool has_cap_nice;
 	unsigned int policy = desired.sched_policy;
+	bool prio_changed = (task->policy != policy ||
+			     task->normal_prio != desired.prio);
 
-	if (task->policy == policy && task->normal_prio == desired.prio)
+	if (!prio_changed && !binder_uclamp_needs_update(task, desired, verify))
 		return;
 
-	has_cap_nice = has_capability_noaudit(task, CAP_SYS_NICE);
+	if (prio_changed) {
+		has_cap_nice = has_capability_noaudit(task, CAP_SYS_NICE);
 
-	priority = to_userspace_prio(policy, desired.prio);
+		priority = to_userspace_prio(policy, desired.prio);
 
-	if (verify && is_rt_policy(policy) && !has_cap_nice) {
-		long max_rtprio = task_rlimit(task, RLIMIT_RTPRIO);
+		if (verify && is_rt_policy(policy) && !has_cap_nice) {
+			long max_rtprio = task_rlimit(task, RLIMIT_RTPRIO);
 
-		if (max_rtprio == 0) {
-			policy = SCHED_NORMAL;
-			priority = MIN_NICE;
-		} else if (priority > max_rtprio) {
-			priority = max_rtprio;
+			if (max_rtprio == 0) {
+				policy = SCHED_NORMAL;
+				priority = MIN_NICE;
+			} else if (priority > max_rtprio) {
+				priority = max_rtprio;
+			}
+		}
+
+		if (verify && is_fair_policy(policy) && !has_cap_nice) {
+			long min_nice = rlimit_to_nice(task_rlimit(task, RLIMIT_NICE));
+
+			if (min_nice > MAX_NICE) {
+				binder_user_error("%d RLIMIT_NICE not set\n",
+						  task->pid);
+				prio_changed = false;
+			} else if (priority < min_nice) {
+				priority = min_nice;
+			}
 		}
 	}
 
-	if (verify && is_fair_policy(policy) && !has_cap_nice) {
-		long min_nice = rlimit_to_nice(task_rlimit(task, RLIMIT_NICE));
+	if (prio_changed) {
+		if (policy != desired.sched_policy ||
+		    to_kernel_prio(policy, priority) != desired.prio)
+			binder_debug(BINDER_DEBUG_PRIORITY_CAP,
+				     "%d: priority %d not allowed, using %d instead\n",
+				     task->pid, desired.prio,
+				     to_kernel_prio(policy, priority));
 
-		if (min_nice > MAX_NICE) {
-			binder_user_error("%d RLIMIT_NICE not set\n",
-					  task->pid);
-			return;
-		} else if (priority < min_nice) {
-			priority = min_nice;
+		trace_binder_set_priority(task->tgid, task->pid,
+					  task->normal_prio,
+					  to_kernel_prio(policy, priority),
+					  desired.prio);
+
+		/* Set the actual priority */
+		if (task->policy != policy || is_rt_policy(policy)) {
+			struct sched_param params;
+
+			params.sched_priority = is_rt_policy(policy) ? priority : 0;
+
+			sched_setscheduler_nocheck(task,
+						   policy | SCHED_RESET_ON_FORK,
+						   &params);
 		}
+		if (is_fair_policy(policy))
+			set_user_nice(task, priority);
 	}
 
-	if (policy != desired.sched_policy ||
-	    to_kernel_prio(policy, priority) != desired.prio)
-		binder_debug(BINDER_DEBUG_PRIORITY_CAP,
-			     "%d: priority %d not allowed, using %d instead\n",
-			      task->pid, desired.prio,
-			      to_kernel_prio(policy, priority));
-
-	trace_binder_set_priority(task->tgid, task->pid, task->normal_prio,
-				  to_kernel_prio(policy, priority),
-				  desired.prio);
-
-	/* Set the actual priority */
-	if (task->policy != policy || is_rt_policy(policy)) {
-		struct sched_param params;
-
-		params.sched_priority = is_rt_policy(policy) ? priority : 0;
-
-		sched_setscheduler_nocheck(task,
-					   policy | SCHED_RESET_ON_FORK,
-					   &params);
-	}
-	if (is_fair_policy(policy))
-		set_user_nice(task, priority);
+	binder_apply_uclamp_min(task, desired, verify);
 }
 
 static void binder_set_priority(struct task_struct *task,
@@ -1271,6 +1352,7 @@ static void binder_transaction_priority(struct task_struct *task,
 	t->set_priority_called = true;
 	t->saved_priority.sched_policy = task->policy;
 	t->saved_priority.prio = task->normal_prio;
+	binder_save_uclamp_min(task, &t->saved_priority);
 
 	if (!inherit_rt && is_rt_policy(desired_prio.sched_policy)) {
 		desired_prio.prio = NICE_TO_PRIO(0);
@@ -1288,6 +1370,7 @@ static void binder_transaction_priority(struct task_struct *task,
 		 * run unbounded, unlike SCHED_RR.
 		 */
 		desired_prio = node_prio;
+		desired_prio.uclamp_min = t->priority.uclamp_min;
 	}
 
 	binder_set_priority(task, desired_prio);
@@ -3066,6 +3149,8 @@ static int binder_proc_transaction(struct binder_transaction *t,
 	binder_node_lock(node);
 	node_prio.prio = node->min_priority;
 	node_prio.sched_policy = node->sched_policy;
+	node_prio.uclamp_min = 0;
+	node_prio.uclamp_saved_user_defined = false;
 
 	if (oneway) {
 		BUG_ON(thread);
@@ -3422,6 +3507,7 @@ static void binder_transaction(struct binder_proc *proc,
 		/* Inherit supported policies for synchronous transactions */
 		t->priority.sched_policy = current->policy;
 		t->priority.prio = current->normal_prio;
+		t->priority.uclamp_min = sched_uclamp_min_get(current);
 	} else {
 		/* Otherwise, fall back to the default priority */
 		t->priority = target_proc->default_priority;
@@ -4892,6 +4978,8 @@ retry:
 			trd->cookie =  target_node->cookie;
 			node_prio.sched_policy = target_node->sched_policy;
 			node_prio.prio = target_node->min_priority;
+			node_prio.uclamp_min = 0;
+			node_prio.uclamp_saved_user_defined = false;
 			binder_transaction_priority(current, t, node_prio,
 						    target_node->inherit_rt);
 			cmd = BR_TRANSACTION;
@@ -5927,6 +6015,7 @@ static int binder_open(struct inode *nodp, struct file *filp)
 		proc->default_priority.sched_policy = SCHED_NORMAL;
 		proc->default_priority.prio = NICE_TO_PRIO(0);
 	}
+	binder_save_uclamp_min(current, &proc->default_priority);
 
 	/* binderfs stashes devices in i_private */
 	if (is_binderfs_device(nodp)) {

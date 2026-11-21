@@ -1311,7 +1311,8 @@ static int uclamp_validate(struct task_struct *p,
 	 * blocking operation which obviously cannot be done while holding
 	 * scheduler locks.
 	 */
-	static_branch_enable(&sched_uclamp_used);
+	if (!static_branch_likely(&sched_uclamp_used))
+		static_branch_enable(&sched_uclamp_used);
 
 	return 0;
 }
@@ -1454,6 +1455,30 @@ static void __init init_uclamp(void)
 		root_task_group.uclamp[clamp_id] = uc_max;
 #endif
 	}
+
+	/*
+	 * Enable the static key at boot so atomic callers such as binder
+	 * priority inheritance never enter static_branch_enable() under lock.
+	 */
+	static_branch_enable(&sched_uclamp_used);
+}
+
+unsigned int sched_uclamp_min_get(struct task_struct *p)
+{
+	return (unsigned int)uclamp_eff_value(p, UCLAMP_MIN);
+}
+
+void sched_uclamp_min_reset(struct task_struct *p)
+{
+	struct rq_flags rf;
+	struct rq *rq;
+
+	rq = task_rq_lock(p, &rf);
+	uclamp_se_set(&p->uclamp_req[UCLAMP_MIN], uclamp_none(UCLAMP_MIN), false);
+	if (unlikely(rt_task(p)))
+		__uclamp_update_util_min_rt_default(p);
+	uclamp_rq_reinc_id(rq, p, UCLAMP_MIN);
+	task_rq_unlock(rq, p, &rf);
 }
 
 #else /* CONFIG_UCLAMP_TASK */
@@ -1504,6 +1529,13 @@ bool uclamp_latency_sensitive(struct task_struct *p)
 #endif /* CONFIG_SMP */
 
 static inline void init_uclamp(void) { }
+
+unsigned int sched_uclamp_min_get(struct task_struct *p)
+{
+	return 0;
+}
+
+void sched_uclamp_min_reset(struct task_struct *p) { }
 #endif /* CONFIG_UCLAMP_TASK */
 
 static inline void enqueue_task(struct rq *rq, struct task_struct *p, int flags)
@@ -4999,6 +5031,9 @@ static int __sched_setscheduler(struct task_struct *p,
 	/* The pi code expects interrupts enabled */
 	BUG_ON(pi && in_interrupt());
 recheck:
+	if (attr->sched_flags & SCHED_FLAG_KEEP_POLICY)
+		policy = SETPARAM_POLICY;
+
 	/* Double check policy once rq lock held: */
 	if (policy < 0) {
 		reset_on_fork = p->sched_reset_on_fork;
@@ -5018,12 +5053,14 @@ recheck:
 	 * 1..MAX_USER_RT_PRIO-1, valid priority for SCHED_NORMAL,
 	 * SCHED_BATCH and SCHED_IDLE is 0.
 	 */
-	if ((p->mm && attr->sched_priority > MAX_USER_RT_PRIO-1) ||
-	    (!p->mm && attr->sched_priority > MAX_RT_PRIO-1))
-		return -EINVAL;
-	if ((dl_policy(policy) && !__checkparam_dl(attr)) ||
-	    (rt_policy(policy) != (attr->sched_priority != 0)))
-		return -EINVAL;
+	if (!(attr->sched_flags & SCHED_FLAG_KEEP_PARAMS)) {
+		if ((p->mm && attr->sched_priority > MAX_USER_RT_PRIO-1) ||
+		    (!p->mm && attr->sched_priority > MAX_RT_PRIO-1))
+			return -EINVAL;
+		if ((dl_policy(policy) && !__checkparam_dl(attr)) ||
+		    (rt_policy(policy) != (attr->sched_priority != 0)))
+			return -EINVAL;
+	}
 
 	/*
 	 * Allow unprivileged RT tasks to decrease priority:
@@ -5115,12 +5152,14 @@ recheck:
 	 * but store a possible modification of reset_on_fork.
 	 */
 	if (unlikely(policy == p->policy)) {
-		if (fair_policy(policy) && attr->sched_nice != task_nice(p))
-			goto change;
-		if (rt_policy(policy) && attr->sched_priority != p->rt_priority)
-			goto change;
-		if (dl_policy(policy) && dl_param_changed(p, attr))
-			goto change;
+		if (!(attr->sched_flags & SCHED_FLAG_KEEP_PARAMS)) {
+			if (fair_policy(policy) && attr->sched_nice != task_nice(p))
+				goto change;
+			if (rt_policy(policy) && attr->sched_priority != p->rt_priority)
+				goto change;
+			if (dl_policy(policy) && dl_param_changed(p, attr))
+				goto change;
+		}
 		if (attr->sched_flags & SCHED_FLAG_UTIL_CLAMP)
 			goto change;
 
@@ -5174,7 +5213,9 @@ change:
 	 * of a SCHED_DEADLINE task) we need to check if enough bandwidth
 	 * is available.
 	 */
-	if ((dl_policy(policy) || dl_task(p)) && sched_dl_overflow(p, policy, attr)) {
+	if (!(attr->sched_flags & SCHED_FLAG_KEEP_PARAMS) &&
+	    (dl_policy(policy) || dl_task(p)) &&
+	    sched_dl_overflow(p, policy, attr)) {
 		task_rq_unlock(rq, p, &rf);
 		return -EBUSY;
 	}
@@ -5182,7 +5223,9 @@ change:
 	p->sched_reset_on_fork = reset_on_fork;
 	oldprio = p->prio;
 
-	if (pi) {
+	if (attr->sched_flags & SCHED_FLAG_KEEP_PARAMS) {
+		queue_flags &= ~DEQUEUE_MOVE;
+	} else if (pi) {
 		/*
 		 * Take priority boosted tasks into account. If the new
 		 * effective priority is unchanged, we just store the new
