@@ -1627,7 +1627,7 @@ static void ufs_mtk_setup_clk_gating(struct ufs_hba *hba)
 		}
 
 		spin_lock_irqsave(hba->host->host_lock, flags);
-		hba->clk_gating.delay_ms = max_t(u32, delay, 10);
+		hba->clk_gating.delay_ms = max_t(u32, delay + 30, 60);
 		spin_unlock_irqrestore(hba->host->host_lock, flags);
 	}
 }
@@ -1637,10 +1637,10 @@ static int ufs_mtk_post_link(struct ufs_hba *hba)
 	/* enable unipro clock gating feature */
 	ufs_mtk_cfg_unipro_cg(hba, true);
 
-	/* configure auto-hibern8 timer to 10 ms */
+	/* configure auto-hibern8 timer to 30 ms */
 	if (ufshcd_is_auto_hibern8_supported(hba)) {
 		ufshcd_auto_hibern8_update(hba,
-			FIELD_PREP(UFSHCI_AHIBERN8_TIMER_MASK, 10) |
+			FIELD_PREP(UFSHCI_AHIBERN8_TIMER_MASK, 30) |
 			FIELD_PREP(UFSHCI_AHIBERN8_SCALE_MASK, 3));
 	}
 
