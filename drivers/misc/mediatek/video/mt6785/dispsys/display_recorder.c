@@ -1298,7 +1298,7 @@ int dprec_logger_pr(unsigned int type, char *fmt, ...)
 {
 	int n = 0;
 	unsigned long flags = 0;
-	uint64_t time = get_current_time_us();
+	uint64_t time;
 	unsigned long rem_nsec;
 	char **buf_arr;
 	char *buf = NULL;
@@ -1309,6 +1309,12 @@ int dprec_logger_pr(unsigned int type, char *fmt, ...)
 
 	if (!is_buffer_init)
 		return -1;
+
+	if ((type == DPREC_LOGGER_DEBUG || type == DPREC_LOGGER_FENCE) &&
+	    !g_mobilelog)
+		return 0;
+
+	time = get_current_time_us();
 
 	spin_lock_irqsave(&dprec_logger_spinlock, flags);
 	if (dprec_logger_buffer[type].len < 128) {
