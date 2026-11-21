@@ -262,6 +262,7 @@ struct zs_pool {
 
 	/* Compact classes */
 	struct shrinker shrinker;
+	int compact_class_idx;
 
 #ifdef CONFIG_ZSMALLOC_STAT
 	struct dentry *stat_dentry;
@@ -2314,7 +2315,8 @@ static unsigned long zs_can_compact(struct size_class *class)
 }
 
 static unsigned long __zs_compact(struct zs_pool *pool,
-				  struct size_class *class)
+				  struct size_class *class,
+				  unsigned long max_pages)
 {
 	struct zs_compact_control cc;
 	struct zspage *src_zspage;
@@ -2350,6 +2352,10 @@ static unsigned long __zs_compact(struct zs_pool *pool,
 		if (putback_zspage(class, src_zspage) == ZS_EMPTY) {
 			free_zspage(pool, class, src_zspage);
 			pages_freed += class->pages_per_zspage;
+			if (max_pages && pages_freed >= max_pages) {
+				src_zspage = NULL;
+				break;
+			}
 		}
 		spin_unlock(&class->lock);
 		cond_resched();
@@ -2376,13 +2382,47 @@ unsigned long zs_compact(struct zs_pool *pool)
 			continue;
 		if (class->index != i)
 			continue;
-		pages_freed += __zs_compact(pool, class);
+		pages_freed += __zs_compact(pool, class, 0);
 	}
 	atomic_long_add(pages_freed, &pool->stats.pages_compacted);
 
 	return pages_freed;
 }
 EXPORT_SYMBOL_GPL(zs_compact);
+
+static unsigned long zs_compact_limited(struct zs_pool *pool,
+					unsigned long nr_to_scan)
+{
+	int i, idx;
+	struct size_class *class;
+	unsigned long pages_freed = 0;
+
+	if (!nr_to_scan)
+		return 0;
+
+	idx = READ_ONCE(pool->compact_class_idx);
+	if (idx < 0 || idx >= ZS_SIZE_CLASSES)
+		idx = ZS_SIZE_CLASSES - 1;
+
+	for (i = 0; i < ZS_SIZE_CLASSES; i++) {
+		class = pool->size_class[idx];
+		if (class && class->index == idx)
+			pages_freed += __zs_compact(pool, class,
+						    nr_to_scan - pages_freed);
+
+		if (--idx < 0)
+			idx = ZS_SIZE_CLASSES - 1;
+
+		if (pages_freed >= nr_to_scan)
+			break;
+	}
+
+	WRITE_ONCE(pool->compact_class_idx, idx);
+	if (pages_freed)
+		atomic_long_add(pages_freed, &pool->stats.pages_compacted);
+
+	return pages_freed;
+}
 
 void zs_pool_stats(struct zs_pool *pool, struct zs_pool_stats *stats)
 {
@@ -2398,11 +2438,11 @@ static unsigned long zs_shrinker_scan(struct shrinker *shrinker,
 			shrinker);
 
 	/*
-	 * Compact classes and calculate compaction delta.
+	 * Compact classes up to sc->nr_to_scan and calculate compaction delta.
 	 * Can run concurrently with a manually triggered
 	 * (by user) compaction.
 	 */
-	pages_freed = zs_compact(pool);
+	pages_freed = zs_compact_limited(pool, sc->nr_to_scan);
 
 	return pages_freed ? pages_freed : SHRINK_STOP;
 }
@@ -2465,6 +2505,8 @@ struct zs_pool *zs_create_pool(const char *name)
 		return NULL;
 
 	init_deferred_free(pool);
+
+	pool->compact_class_idx = ZS_SIZE_CLASSES - 1;
 
 	pool->name = kstrdup(name, GFP_KERNEL);
 	if (!pool->name)
