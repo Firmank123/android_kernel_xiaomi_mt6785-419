@@ -5330,7 +5330,7 @@ void mtk_cpu_overutilized(int cpu, int *overutilized)
 	}
 
 	for_each_cpu(i, perf_domain_span(pd)) {
-		sum_util += cpu_util(i);
+		sum_util += uclamp_rq_util_with(cpu_rq(i), cpu_util(i), NULL);
 		sum_cap += capacity_of(i);
 	}
 
