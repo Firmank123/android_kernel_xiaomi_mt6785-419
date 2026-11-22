@@ -203,6 +203,11 @@ static FORCE_INLINE int LZ4_decompress_generic(
 	BYTE * const oend = op + outputSize;
 	BYTE *cpy;
 
+	size_t length;
+	const BYTE *match;
+	size_t offset;
+	unsigned int token;
+
 	const BYTE * const dictEnd = (dictStart == NULL) ?
 				     NULL : (const BYTE *)dictStart + dictSize;
 
@@ -247,10 +252,7 @@ static FORCE_INLINE int LZ4_decompress_generic(
 		/* Fast loop : decode sequences as long as output < oend-FASTLOOP_SAFE_DISTANCE */
 		DEBUGLOG(6, "using fast decode loop");
 		while (1) {
-			size_t length;
-			const BYTE *match;
-			size_t offset;
-			unsigned int const token = *ip++;
+			token = *ip++;
 
 			/* Main fastloop assertion: We can always wildcopy FASTLOOP_SAFE_DISTANCE */
 			assert(oend - op >= FASTLOOP_SAFE_DISTANCE);
@@ -317,11 +319,11 @@ static FORCE_INLINE int LZ4_decompress_generic(
 				length += MINMATCH;
 				if (unlikely((uptrval)(op) + length < (uptrval)op))
 					goto _output_error;
-				if (length >= (size_t)(oend - FASTLOOP_SAFE_DISTANCE - op))
+				if (op + length >= oend - FASTLOOP_SAFE_DISTANCE)
 					goto safe_match_copy;
 			} else {
 				length += MINMATCH;
-				if (length >= (size_t)(oend - FASTLOOP_SAFE_DISTANCE - op))
+				if (op + length >= oend - FASTLOOP_SAFE_DISTANCE)
 					goto safe_match_copy;
 
 				/* Fastpath check: skip LZ4_wildCopy32 when true */
@@ -395,12 +397,8 @@ safe_decode:
 
 	/* Main Loop : decode sequences */
 	while (1) {
-		size_t length;
-		const BYTE *match;
-		size_t offset;
-
 		/* get literal length */
-		unsigned int const token = *ip++;
+		token = *ip++;
 		length = token>>ML_BITS;
 
 		/* ip < iend before the increment */
