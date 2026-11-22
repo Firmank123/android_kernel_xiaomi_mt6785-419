@@ -403,6 +403,10 @@ static void cache_nat_entry(struct f2fs_sb_info *sbi, nid_t nid,
 	struct f2fs_nm_info *nm_i = NM_I(sbi);
 	struct nat_entry *new, *e;
 
+	/* Let's mitigate lock contention of nat_tree_lock during checkpoint */
+	if (mutex_is_locked(&sbi->cp_mutex))
+		return;
+
 	new = __alloc_nat_entry(nid, false);
 	if (!new)
 		return;

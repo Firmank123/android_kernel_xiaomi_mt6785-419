@@ -1482,19 +1482,70 @@ static int ufs_mtk_pre_pwr_change(struct ufs_hba *hba,
 	return ret;
 }
 
+static void ufs_mtk_force_error_recovery(struct ufs_hba *hba)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(hba->host->host_lock, flags);
+	if (hba->ufshcd_state == UFSHCD_STATE_OPERATIONAL) {
+		hba->saved_err |= UIC_HIBERNATE_EXIT;
+		if (atomic_inc_return(&hba->scsi_block_reqs_cnt) == 1)
+			scsi_block_requests(hba->host);
+		hba->ufshcd_state = UFSHCD_STATE_EH_SCHEDULED;
+		schedule_work(&hba->eh_work);
+	}
+	spin_unlock_irqrestore(hba->host->host_lock, flags);
+}
+
+static int ufs_mtk_auto_hibern8_disable(struct ufs_hba *hba)
+{
+	struct ufs_mtk_host *host = ufshcd_get_variant(hba);
+	u32 state = VS_LINK_UP;
+	int ret;
+
+	/* disable auto-hibern8 */
+	ufshcd_writel(hba, 0, REG_AUTO_HIBERNATE_IDLE_TIMER);
+	host->auto_hibern_enabled = false;
+
+	/* wait host return to idle state when auto-hibern8 off */
+	ufs_mtk_wait_idle_state(hba, 5);
+
+	ret = ufs_mtk_wait_link_state(hba, &state, 100);
+	if (ret) {
+		dev_warn(hba->dev, "exit h8 state fail, ret=%d\n", ret);
+
+		ufs_mtk_force_error_recovery(hba);
+
+		ret = -EBUSY;
+	}
+
+	return ret;
+}
+
 static int ufs_mtk_pwr_change_notify(struct ufs_hba *hba,
 				     enum ufs_notify_change_status stage,
 				     struct ufs_pa_layer_attr *dev_max_params,
 				     struct ufs_pa_layer_attr *dev_req_params)
 {
+	struct ufs_mtk_host *host = ufshcd_get_variant(hba);
 	int ret = 0;
+	static u32 reg;
 
 	switch (stage) {
 	case PRE_CHANGE:
+		if (ufshcd_is_auto_hibern8_supported(hba)) {
+			reg = ufshcd_readl(hba, REG_AUTO_HIBERNATE_IDLE_TIMER);
+			ufs_mtk_auto_hibern8_disable(hba);
+		}
 		ret = ufs_mtk_pre_pwr_change(hba, dev_max_params,
 					     dev_req_params);
 		break;
 	case POST_CHANGE:
+		if (ufshcd_is_auto_hibern8_supported(hba)) {
+			ufshcd_writel(hba, reg, REG_AUTO_HIBERNATE_IDLE_TIMER);
+			if (reg && ufs_mtk_has_broken_auto_hibern8(hba))
+				host->auto_hibern_enabled = true;
+		}
 		break;
 	default:
 		ret = -EINVAL;
@@ -1561,16 +1612,22 @@ static int ufs_mtk_pre_link(struct ufs_hba *hba)
 static void ufs_mtk_setup_clk_gating(struct ufs_hba *hba)
 {
 	unsigned long flags;
-	u32 delay;
+	u32 delay = 10;
+	u32 ah_scale, ah_timer;
+	static const u32 scale_us[] = {1, 10, 100, 1000, 10000, 100000};
 
 	if (ufshcd_is_clkgating_allowed(hba)) {
-		if (ufshcd_is_auto_hibern8_supported(hba) && hba->ahit)
-			delay = FIELD_GET(UFSHCI_AHIBERN8_TIMER_MASK,
-					  hba->ahit) + 5;
-		else
-			delay = 15;
+		if (ufshcd_is_auto_hibern8_supported(hba) && hba->ahit) {
+			ah_scale = FIELD_GET(UFSHCI_AHIBERN8_SCALE_MASK,
+					     hba->ahit);
+			ah_timer = FIELD_GET(UFSHCI_AHIBERN8_TIMER_MASK,
+					     hba->ahit);
+			if (ah_scale < ARRAY_SIZE(scale_us))
+				delay = ah_timer * scale_us[ah_scale] / 1000;
+		}
+
 		spin_lock_irqsave(hba->host->host_lock, flags);
-		hba->clk_gating.delay_ms = delay;
+		hba->clk_gating.delay_ms = max_t(u32, delay + 30, 60);
 		spin_unlock_irqrestore(hba->host->host_lock, flags);
 	}
 }
@@ -1580,10 +1637,10 @@ static int ufs_mtk_post_link(struct ufs_hba *hba)
 	/* enable unipro clock gating feature */
 	ufs_mtk_cfg_unipro_cg(hba, true);
 
-	/* configure auto-hibern8 timer to 10 ms */
+	/* configure auto-hibern8 timer to 30 ms */
 	if (ufshcd_is_auto_hibern8_supported(hba)) {
 		ufshcd_auto_hibern8_update(hba,
-			FIELD_PREP(UFSHCI_AHIBERN8_TIMER_MASK, 10) |
+			FIELD_PREP(UFSHCI_AHIBERN8_TIMER_MASK, 30) |
 			FIELD_PREP(UFSHCI_AHIBERN8_SCALE_MASK, 3));
 	}
 

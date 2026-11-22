@@ -31,9 +31,9 @@ int mt_cpufreq_set_by_wfi_load_cluster(unsigned int cluster_id,
 #ifdef CONFIG_HYBRID_CPU_DVFS
 	enum mt_cpu_dvfs_id id = (enum mt_cpu_dvfs_id) cluster_id;
 #if defined(CONFIG_MACH_MT6893) || defined(CONFIG_MACH_MT6877) \
-	|| defined(CONFIG_MACH_MT6781)
+	|| defined(CONFIG_MACH_MT6781) || defined(CONFIG_MACH_MT6785)
 	struct mt_cpu_dvfs *p = id_to_cpu_dvfs(id);
-	struct cpufreq_policy *policy = p->mt_policy;
+	struct cpufreq_policy *policy = p ? p->mt_policy : NULL;
 	int cpu;
 #endif
 
@@ -46,15 +46,22 @@ int mt_cpufreq_set_by_wfi_load_cluster(unsigned int cluster_id,
 		g_pCpuFreqSampler_func_cpi(id, freq);
 #endif /* CONFIG_MTK_CM_MGR */
 #if defined(CONFIG_MACH_MT6893) || defined(CONFIG_MACH_MT6877) \
-	|| defined(CONFIG_MACH_MT6781)
-	for_each_cpu(cpu, policy->cpus)
-		trace_cpu_frequency(freq, cpu);
+	|| defined(CONFIG_MACH_MT6781) || defined(CONFIG_MACH_MT6785)
+	if (p && p->mt_policy) {
+		for_each_cpu(cpu, policy->cpus)
+			trace_cpu_frequency(freq, cpu);
+	}
 #endif
 	cpuhvfs_set_dvfs(id, freq);
 #if defined(CONFIG_MACH_MT6893) || defined(CONFIG_MACH_MT6877) \
-	|| defined(CONFIG_MACH_MT6781)
-	policy->cur = freq;
-	arch_set_freq_scale(policy->cpus, freq, policy->cpuinfo.max_freq);
+	|| defined(CONFIG_MACH_MT6781) || defined(CONFIG_MACH_MT6785)
+	if (p && p->mt_policy) {
+		policy->cur = freq;
+#ifndef CONFIG_MACH_MT6785
+		arch_set_freq_scale(policy->cpus, freq,
+				    policy->cpuinfo.max_freq);
+#endif
+	}
 #endif
 #endif
 

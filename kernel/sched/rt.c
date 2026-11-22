@@ -1483,6 +1483,10 @@ select_task_rq_rt(struct task_struct *p, int cpu, int sd_flag, int flags,
 	 * requirement of the task - which is only important on heterogeneous
 	 * systems like big.LITTLE.
 	 */
+	test = curr &&
+	       unlikely(rt_task(curr)) &&
+	       (curr->nr_cpus_allowed < 2 || curr->prio <= p->prio);
+
 #ifdef CONFIG_MTK_SCHED_INTEROP
 	/*
 	 * If the task is allowed to put more than one CPU.
@@ -1491,10 +1495,6 @@ select_task_rq_rt(struct task_struct *p, int cpu, int sd_flag, int flags,
 	 */
 	if ((p->nr_cpus_allowed > 1)) {
 #else
-	test = curr &&
-	       unlikely(rt_task(curr)) &&
-	       (curr->nr_cpus_allowed < 2 || curr->prio <= p->prio);
-
 	if (test || !rt_task_fits_capacity(p, cpu)) {
 #endif
 		int target = find_lowest_rq(p);
@@ -1772,16 +1772,41 @@ static int find_lowest_rq(struct task_struct *task)
 
 	if (pod_is_ready()) {
 		for_each_perf_domain_ascending(domain) {
+			if (domain_cnt >= ARRAY_SIZE(tmp_domain))
+				break;
 			tmp_domain[domain_cnt] = domain;
 			domain_cnt++;
 		}
+		rcu_read_lock();
 		for (i = 0; i < domain_cnt; i++) {
+			int best_cpu = -1;
+			unsigned int min_exit_lat = UINT_MAX;
+
 			for_each_cpu(iter_cpu, &tmp_domain[i]->possible_cpus) {
-				if (cpumask_test_cpu(iter_cpu, lowest_mask) &&
-					idle_cpu(iter_cpu))
+				struct cpuidle_state *idle;
+				unsigned int exit_lat;
+
+				if (!cpumask_test_cpu(iter_cpu, lowest_mask) ||
+				    !idle_cpu(iter_cpu))
+					continue;
+
+				idle = idle_get_state(cpu_rq(iter_cpu));
+				exit_lat = idle ? idle->exit_latency : 0;
+				if (exit_lat == 0) {
+					rcu_read_unlock();
 					return iter_cpu;
+				}
+				if (best_cpu == -1 || exit_lat < min_exit_lat) {
+					min_exit_lat = exit_lat;
+					best_cpu = iter_cpu;
+				}
+			}
+			if (best_cpu != -1) {
+				rcu_read_unlock();
+				return best_cpu;
 			}
 		}
+		rcu_read_unlock();
 	}
 #endif
 

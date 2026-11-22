@@ -32,6 +32,7 @@
 #include <linux/version.h>
 #include <linux/delay.h>
 #include <linux/mutex.h>
+#include <linux/atomic.h>
 #include <linux/platform_device.h>
 #include <linux/input.h>
 #include <linux/interrupt.h>
@@ -124,6 +125,7 @@ struct ts_rawdata_info{
  * @mutex: mutex lock
  * @wq: workqueue to do register work
  * @core_data: core_data pointer
+ * @mod_count: registered external modules count
  */
 struct goodix_module {
 	struct list_head head;
@@ -132,6 +134,7 @@ struct goodix_module {
 	struct workqueue_struct *wq;
 	struct completion core_comp;
 	struct goodix_ts_core *core_data;
+	atomic_t mod_count;
 };
 
 /*

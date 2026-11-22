@@ -49,6 +49,7 @@ $(warning Detected assembler with broken .inst; disassembly will be unreliable)
 endif
 
 KBUILD_CFLAGS	+= -mgeneral-regs-only $(compat_vdso) $(cc_has_k_constraint)
+KBUILD_CFLAGS	+= $(call cc-option,-march=armv8.2-a) $(call cc-option,-mtune=cortex-a76)
 KBUILD_CFLAGS	+= -fno-asynchronous-unwind-tables
 KBUILD_CFLAGS	+= $(call cc-disable-warning, psabi)
 KBUILD_AFLAGS	+= $(compat_vdso)

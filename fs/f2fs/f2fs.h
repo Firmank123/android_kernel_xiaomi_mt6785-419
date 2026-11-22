@@ -1274,6 +1274,7 @@ enum {
 	GC_IDLE_CB,
 	GC_IDLE_GREEDY,
 	GC_URGENT,
+	GC_URGENT_MID,
 };
 
 enum {
@@ -2481,6 +2482,9 @@ static inline bool is_idle(struct f2fs_sb_info *sbi, int type)
 	if (SM_I(sbi) && SM_I(sbi)->fcc_info &&
 			atomic_read(&SM_I(sbi)->fcc_info->queued_flush))
 		return false;
+
+	if (sbi->gc_mode == GC_URGENT_MID)
+		return true;
 
 	return f2fs_time_over(sbi, type);
 }
