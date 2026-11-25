@@ -322,6 +322,15 @@ static const char *dprec_logger_spy(enum DPREC_LOGGER_ENUM l)
 	}
 }
 
+static inline bool dprec_logger_should_record(enum DPREC_LOGGER_ENUM source)
+{
+	if (unlikely(READ_ONCE(_control.overall_switch)))
+		return true;
+	return source == DPREC_LOGGER_RDMA0_TRANSFER_1SECOND ||
+	       source == DPREC_LOGGER_OVL_FRAME_COMPLETE_1SECOND ||
+	       source == DPREC_LOGGER_PQ_TRIGGER_1SECOND;
+}
+
 void dprec_logger_trigger(unsigned int type_logsrc, unsigned int val1,
 			  unsigned int val2)
 {
@@ -333,6 +342,8 @@ void dprec_logger_trigger(unsigned int type_logsrc, unsigned int val1,
 	dprec_to_mmp(type_logsrc, MMPROFILE_FLAG_PULSE, val1, val2);
 
 	source = type_logsrc & 0xffffff;
+	if (!dprec_logger_should_record(source))
+		return;
 	spin_lock_irqsave(&gdprec_logger_spinlock, flags);
 	l = &logger[source];
 	time = get_current_time_us();
@@ -400,6 +411,8 @@ void dprec_logger_start(unsigned int type_logsrc, unsigned int val1,
 	dprec_to_mmp(type_logsrc, MMPROFILE_FLAG_START, val1, val2);
 
 	source = type_logsrc & 0xffffff;
+	if (!dprec_logger_should_record(source))
+		return;
 	spin_lock_irqsave(&gdprec_logger_spinlock, flags);
 	l = &logger[source];
 	time = get_current_time_us();
@@ -436,6 +449,8 @@ void dprec_logger_done(unsigned int type_logsrc, unsigned int val1,
 	dprec_to_mmp(type_logsrc, MMPROFILE_FLAG_END, val1, val2);
 
 	source = type_logsrc & 0xffffff;
+	if (!dprec_logger_should_record(source))
+		return;
 	spin_lock_irqsave(&gdprec_logger_spinlock, flags);
 	l = &logger[source];
 	time = get_current_time_us();
@@ -591,7 +606,8 @@ void dprec_start(struct dprec_logger_event *event, unsigned int val1,
 	if (event->level & DPREC_LOGGER_LEVEL_MMP)
 		mmprofile_log_ex(event->mmp, MMPROFILE_FLAG_START, val1, val2);
 
-	if (event->level & DPREC_LOGGER_LEVEL_LOGGER) {
+	if ((event->level & DPREC_LOGGER_LEVEL_LOGGER) &&
+	    unlikely(READ_ONCE(_control.overall_switch))) {
 		unsigned long flags = 0;
 		struct dprec_logger *l;
 		unsigned long long time;
@@ -637,7 +653,8 @@ void dprec_done(struct dprec_logger_event *event, unsigned int val1,
 	if (event->level & DPREC_LOGGER_LEVEL_MMP)
 		mmprofile_log_ex(event->mmp, MMPROFILE_FLAG_END, val1, val2);
 
-	if (event->level & DPREC_LOGGER_LEVEL_LOGGER) {
+	if ((event->level & DPREC_LOGGER_LEVEL_LOGGER) &&
+	    unlikely(READ_ONCE(_control.overall_switch))) {
 		unsigned long flags = 0;
 		struct dprec_logger *l;
 		unsigned long long time;
@@ -687,7 +704,8 @@ void dprec_trigger(struct dprec_logger_event *event, unsigned int val1,
 	if (event->level & DPREC_LOGGER_LEVEL_MMP)
 		mmprofile_log_ex(event->mmp, MMPROFILE_FLAG_PULSE, val1, val2);
 
-	if (event->level & DPREC_LOGGER_LEVEL_LOGGER) {
+	if ((event->level & DPREC_LOGGER_LEVEL_LOGGER) &&
+	    unlikely(READ_ONCE(_control.overall_switch))) {
 		unsigned long flags = 0;
 		struct dprec_logger *l;
 		unsigned long long time;
@@ -764,6 +782,12 @@ void dprec_logger_submit(unsigned int type_logsrc, unsigned long long period,
 	unsigned long flags = 0;
 	enum DPREC_LOGGER_ENUM source = type_logsrc & 0xffffff;
 	struct dprec_logger *l;
+
+	if (!dprec_logger_should_record(source)) {
+		dprec_to_mmp(type_logsrc, MMPROFILE_FLAG_PULSE,
+			     (unsigned int)period, fence_idx);
+		return;
+	}
 
 	spin_lock_irqsave(&gdprec_logger_spinlock, flags);
 	l = &logger[source];
