@@ -1317,6 +1317,9 @@ static int ufs_mtk_init(struct ufs_hba *hba)
 
 	ufs_mtk_parse_dt(host);
 
+	ufs_mtk_setup_ref_clk_wait_us(hba, REFCLK_DEFAULT_WAIT_US,
+				      REFCLK_DEFAULT_WAIT_US);
+
 	/* Enable runtime autosuspend */
 	hba->caps |= UFSHCD_CAP_RPM_AUTOSUSPEND;
 
@@ -1743,7 +1746,7 @@ static void ufs_mtk_vreg_set_lpm(struct ufs_hba *hba, bool lpm)
 	if (!hba->vreg_info.vccq2)
 		return;
 
-	if (lpm & !hba->vreg_info.vcc->enabled)
+	if (lpm && (!hba->vreg_info.vcc || !hba->vreg_info.vcc->enabled))
 		regulator_set_mode(hba->vreg_info.vccq2->reg,
 					REGULATOR_MODE_IDLE);
 	else if (!lpm)
@@ -1851,6 +1854,9 @@ static int ufs_mtk_apply_dev_quirks(struct ufs_hba *hba)
 		ufs_mtk_setup_ref_clk_wait_us(hba, 30, 30);
 	else if (mid == UFS_VENDOR_TOSHIBA)
 		ufs_mtk_setup_ref_clk_wait_us(hba, 100, 32);
+	else
+		ufs_mtk_setup_ref_clk_wait_us(hba, REFCLK_DEFAULT_WAIT_US,
+					      REFCLK_DEFAULT_WAIT_US);
 
 	return 0;
 }

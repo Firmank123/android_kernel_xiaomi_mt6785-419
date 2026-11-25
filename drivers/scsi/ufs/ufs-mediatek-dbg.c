@@ -6,7 +6,9 @@
  */
 #include <linux/atomic.h>
 #include <linux/device.h>
+#include <linux/mm.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/proc_fs.h>
 #include <linux/sched/clock.h>
 #include <linux/seq_file.h>
@@ -30,6 +32,7 @@
 static bool cmd_hist_initialized;
 static bool cmd_hist_enabled;
 static spinlock_t cmd_hist_lock;
+static DEFINE_MUTEX(cmd_hist_tp_lock);
 static unsigned int cmd_hist_cnt;
 static unsigned int cmd_hist_ptr = MAX_CMD_HIST_ENTRY_CNT - 1;
 static struct cmd_hist_struct *cmd_hist;
@@ -192,6 +195,9 @@ static void probe_ufshcd_command(void *data, const char *dev_name,
 	unsigned long flags;
 	enum cmd_hist_event event;
 
+	if (!READ_ONCE(cmd_hist_enabled))
+		return;
+
 	spin_lock_irqsave(&cmd_hist_lock, flags);
 
 	if (!cmd_hist_enabled)
@@ -254,6 +260,9 @@ static void probe_ufshcd_uic_command(void *data, const char *dev_name,
 	unsigned long flags;
 	enum cmd_hist_event event;
 
+	if (!READ_ONCE(cmd_hist_enabled))
+		return;
+
 	spin_lock_irqsave(&cmd_hist_lock, flags);
 
 	if (!cmd_hist_enabled)
@@ -301,6 +310,9 @@ static void probe_ufshcd_clk_gating(void *data, const char *dev_name,
 	int ptr;
 	unsigned long flags;
 
+	if (!READ_ONCE(cmd_hist_enabled))
+		return;
+
 	spin_lock_irqsave(&cmd_hist_lock, flags);
 
 	if (!cmd_hist_enabled)
@@ -323,6 +335,9 @@ static void probe_ufshcd_device_reset(void *data, const char *dev_name)
 {
 	int ptr;
 	unsigned long flags;
+
+	if (!READ_ONCE(cmd_hist_enabled))
+		return;
 
 	spin_lock_irqsave(&cmd_hist_lock, flags);
 
@@ -378,31 +393,88 @@ static void lookup_tracepoints(struct tracepoint *tp, void *ignore)
 int cmd_hist_enable(void)
 {
 	unsigned long flags;
+	int i;
 	int ret = 0;
 
+	mutex_lock(&cmd_hist_tp_lock);
+	if (!cmd_hist) {
+		ret = -ENOMEM;
+		goto out_unlock_tp;
+	}
+
+	FOR_EACH_INTEREST(i) {
+		if (interests[i].tp && !interests[i].init) {
+			ret = tracepoint_probe_register(interests[i].tp,
+							interests[i].func,
+							NULL);
+			if (ret) {
+				pr_info("Error: register %s failed (%d)\n",
+					interests[i].name, ret);
+				for (i--; i >= 0; i--) {
+					if (interests[i].tp && interests[i].init) {
+						tracepoint_probe_unregister(
+							interests[i].tp,
+							interests[i].func,
+							NULL);
+						interests[i].init = false;
+					}
+				}
+				tracepoint_synchronize_unregister();
+				goto out_unlock_tp;
+			}
+			interests[i].init = true;
+		}
+	}
+
 	spin_lock_irqsave(&cmd_hist_lock, flags);
-	cmd_hist_enabled = true;
+	WRITE_ONCE(cmd_hist_enabled, true);
 	spin_unlock_irqrestore(&cmd_hist_lock, flags);
 
+out_unlock_tp:
+	mutex_unlock(&cmd_hist_tp_lock);
 	return ret;
 }
 
 int cmd_hist_disable(void)
 {
 	unsigned long flags;
+	int i;
+	bool unregistered = false;
 
 	spin_lock_irqsave(&cmd_hist_lock, flags);
-	cmd_hist_enabled = false;
+	WRITE_ONCE(cmd_hist_enabled, false);
 	spin_unlock_irqrestore(&cmd_hist_lock, flags);
+
+	mutex_lock(&cmd_hist_tp_lock);
+	FOR_EACH_INTEREST(i) {
+		if (interests[i].tp && interests[i].init) {
+			tracepoint_probe_unregister(interests[i].tp,
+						    interests[i].func, NULL);
+			interests[i].init = false;
+			unregistered = true;
+		}
+	}
+	if (unregistered)
+		tracepoint_synchronize_unregister();
+	mutex_unlock(&cmd_hist_tp_lock);
 
 	return 0;
 }
 
 static void cmd_hist_cleanup(void)
 {
+	struct cmd_hist_struct *hist;
+	unsigned long flags;
+
 	cmd_hist_disable();
-	vfree(cmd_hist);
+
+	spin_lock_irqsave(&cmd_hist_lock, flags);
+	cmd_hist_initialized = false;
+	hist = cmd_hist;
 	cmd_hist = NULL;
+	spin_unlock_irqrestore(&cmd_hist_lock, flags);
+
+	kvfree(hist);
 }
 
 void ufs_mtk_dbg_add_trace(const char *dev_name,
@@ -528,8 +600,10 @@ static void ufsdbg_print_cmd_hist(char **buff, unsigned long *size,
 
 	spin_lock_irqsave(&cmd_hist_lock, flags);
 
-	if (!cmd_hist)
+	if (!cmd_hist) {
+		spin_unlock_irqrestore(&cmd_hist_lock, flags);
 		return;
+	}
 
 	cnt = min_t(u32, cmd_hist_cnt, MAX_CMD_HIST_ENTRY_CNT);
 	if (latest_cnt)
@@ -757,15 +831,6 @@ int ufsdbg_init_procfs(void)
 
 static void ufsdbg_cleanup(void)
 {
-	int i;
-
-	FOR_EACH_INTEREST(i) {
-		if (interests[i].init) {
-			tracepoint_probe_unregister(interests[i].tp,
-						    interests[i].func, NULL);
-		}
-	}
-
 	cmd_hist_cleanup();
 }
 
@@ -774,9 +839,8 @@ int ufsdbg_register(struct device *dev)
 	int i, ret;
 
 	spin_lock_init(&cmd_hist_lock);
-	cmd_hist_initialized = true;
 
-	/* Install the tracepoints */
+	/* Find tracepoints; register lazily on cmd_hist_enable() */
 	for_each_kernel_tracepoint(lookup_tracepoints, NULL);
 
 	FOR_EACH_INTEREST(i) {
@@ -785,26 +849,22 @@ int ufsdbg_register(struct device *dev)
 			ret = -EINVAL;
 			goto out;
 		}
-
-		tracepoint_probe_register(interests[i].tp, interests[i].func,
-					  NULL);
-		interests[i].init = true;
 	}
 
 	/* Create control nodes in procfs */
 	ret = ufsdbg_init_procfs();
-
-	/* Enable command history feature by default */
-	if (ret) {
+	if (ret)
 		goto out;
-	}
+
 	cmd_hist = kcalloc(MAX_CMD_HIST_ENTRY_CNT,
 				sizeof(struct cmd_hist_struct), GFP_NOFS);
 	if (!cmd_hist) {
 		ret = -ENOMEM;
 		goto out;
 	}
-	cmd_hist_enable();
+
+	cmd_hist_initialized = true;
+	WRITE_ONCE(cmd_hist_enabled, false);
 	return ret;
 out:
 	ufsdbg_cleanup();
