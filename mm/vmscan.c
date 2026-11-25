@@ -121,6 +121,8 @@ struct scan_control {
 
 	/* Reclaim decisions for the current node and reclaim root */
 	unsigned int cache_trim_mode:1;
+	unsigned int no_cache_trim:1;
+	unsigned int cache_trim_skipped_anon:1;
 	unsigned int file_is_tiny:1;
 
 	/* This context's GFP mask */
@@ -2425,7 +2427,7 @@ static void prepare_reclaim_root(struct pglist_data *pgdat,
 
 	file = reclaim_root_lru_size(pgdat, root, LRU_INACTIVE_FILE,
 				     MAX_NR_ZONES);
-	sc->cache_trim_mode = (file >> sc->priority) &&
+	sc->cache_trim_mode = !sc->no_cache_trim && (file >> sc->priority) &&
 			      !(sc->may_deactivate & DEACTIVATE_FILE);
 
 	/* File exhaustion is a node property, including in global reclaim. */
@@ -2575,6 +2577,8 @@ static void get_scan_count(struct lruvec *lruvec, struct mem_cgroup *memcg,
 				       sc->reclaim_idx);
 		if (anon && !file)
 			sc->skipped_deactivate = 1;
+		if (anon && swappiness && current_is_kswapd())
+			sc->cache_trim_skipped_anon = 1;
 		scan_balance = SCAN_FILE;
 		goto out;
 	}
@@ -3776,6 +3780,7 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int classzone_idx)
 
 restart:
 	sc.priority = DEF_PRIORITY;
+	sc.cache_trim_skipped_anon = 0;
 	do {
 		unsigned long nr_reclaimed = sc.nr_reclaimed;
 		bool raise_priority = true;
@@ -3903,6 +3908,13 @@ restart:
 		if (raise_priority || !nr_reclaimed)
 			sc.priority--;
 	} while (sc.priority >= 1);
+
+	/* Retry once if cache trimming kept reclaim from scanning anon. */
+	if (!sc.nr_reclaimed && sc.priority < 1 && !sc.no_cache_trim &&
+	    sc.cache_trim_skipped_anon && get_nr_swap_pages() > 0) {
+		sc.no_cache_trim = 1;
+		goto restart;
+	}
 
 	if (!sc.nr_reclaimed)
 		pgdat->kswapd_failures++;
