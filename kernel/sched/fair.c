@@ -6803,8 +6803,7 @@ ___select_idle_sibling(struct task_struct *p, int prev_cpu, int new_cpu)
 {
 	if (sched_feat(SCHED_MTK_EAS)) {
 #if defined(CONFIG_SCHED_TUNE) || defined(CONFIG_UCLAMP_TASK)
-		bool prefer_idle = uclamp_latency_sensitive(p) ||
-				   uclamp_boosted(p);
+		bool prefer_idle = uclamp_latency_sensitive(p) > 0;
 #else
 		bool prefer_idle = true;
 #endif
