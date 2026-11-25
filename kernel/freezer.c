@@ -9,6 +9,7 @@
 #include <linux/export.h>
 #include <linux/syscalls.h>
 #include <linux/freezer.h>
+#include <linux/sched/signal.h>
 #include <linux/kthread.h>
 
 /* total number of freezing conditions in effect */
@@ -47,6 +48,9 @@ bool freezing_slow_path(struct task_struct *p)
 	if (test_tsk_thread_flag(p, TIF_MEMDIE))
 		return false;
 
+	if (!pm_nosig_freezing && !pm_freezing && fatal_signal_pending(p))
+		return false;
+
 	if (pm_nosig_freezing || cgroup_freezing(p))
 		return true;
 
@@ -68,7 +72,10 @@ bool __refrigerator(bool check_kthr_stop)
 	pr_debug("%s entered refrigerator\n", current->comm);
 
 	for (;;) {
-		set_current_state(TASK_UNINTERRUPTIBLE);
+		if (pm_nosig_freezing || pm_freezing)
+			set_current_state(TASK_UNINTERRUPTIBLE);
+		else
+			set_current_state(TASK_KILLABLE);
 
 		spin_lock_irq(&freezer_lock);
 		current->flags |= PF_FROZEN;
