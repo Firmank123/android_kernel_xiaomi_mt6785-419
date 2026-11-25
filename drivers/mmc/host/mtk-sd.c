@@ -16,6 +16,7 @@
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/dma-mapping.h>
+#include <linux/iopoll.h>
 #include <linux/ioport.h>
 #include <linux/irq.h>
 #include <linux/of_address.h>
@@ -866,6 +867,8 @@ void msdc_gate_clock(struct mmc_host *mmc)
 void msdc_ungate_clock(struct mmc_host *mmc)
 {
 	struct msdc_host *host = mmc_priv(mmc);
+	u32 val;
+	int ret;
 
 	if (!host)
 		return;
@@ -877,8 +880,10 @@ void msdc_ungate_clock(struct mmc_host *mmc)
 	if (mmc->caps2 & MMC_CAP2_CRYPTO)
 		clk_prepare_enable(host->crypto_clk);
 
-	while (!(readl(host->base + MSDC_CFG) & MSDC_CFG_CKSTB))
-		cpu_relax();
+	ret = readl_poll_timeout_atomic(host->base + MSDC_CFG, val,
+					val & MSDC_CFG_CKSTB, 1, 20000);
+	if (ret)
+		dev_warn(host->dev, "msdc clock ungate timeout\n");
 }
 
 static void msdc_set_mclk(struct msdc_host *host, unsigned char timing, u32 hz)

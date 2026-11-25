@@ -29,10 +29,10 @@
 #include "mtk-sd-dbg.h"
 
 struct msdc_host *mtk_msdc_host[] = { NULL, NULL, NULL};
-static int enable_msdc_debug = 1;
+static int enable_msdc_debug;
 
 static unsigned char cmd_buf[256];
-#define dbg_max_cnt (40000)
+#define dbg_max_cnt (1024)
 #define MSDC_AEE_BUFFER_SIZE (300 * 1024)
 struct dbg_run_host_log {
 	unsigned long long time_sec;
@@ -458,11 +458,7 @@ int msdc_debug_proc_init(void)
 	kgid_t gid;
 	struct proc_dir_entry *prEntry;
 
-#ifdef USER_BUILD_KERNEL
 	enable_msdc_debug = 0;
-#else
-	enable_msdc_debug = 1;
-#endif
 
 	uid = make_kuid(&init_user_ns, 0);
 	gid = make_kgid(&init_user_ns, 1001);
