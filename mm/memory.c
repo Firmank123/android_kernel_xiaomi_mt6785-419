@@ -70,6 +70,7 @@
 #include <linux/userfaultfd_k.h>
 #include <linux/dax.h>
 #include <linux/oom.h>
+#include <linux/wait.h>
 
 #include <trace/events/kmem.h>
 
@@ -2889,6 +2890,8 @@ static void count_swapin_anon_cost(struct page *page, swp_entry_t entry,
 			 hpage_nr_pages(page));
 }
 
+static DECLARE_WAIT_QUEUE_HEAD(swapcache_waitqueue);
+
 vm_fault_t do_swap_page(struct vm_fault *vmf)
 {
 	struct vm_area_struct *vma = vmf->vma;
@@ -2947,8 +2950,17 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 			 * pte_same() returns true due to entry reuse.
 			 */
 			if (swapcache_prepare(entry)) {
-				/* Relax a bit to prevent rapid repeated page faults */
-				schedule_timeout_uninterruptible(1);
+				DEFINE_WAIT(wait);
+
+				/*
+				 * Relax a bit to prevent rapid repeated page
+				 * faults, waking early when the pin holder
+				 * clears swapcache.
+				 */
+				prepare_to_wait(&swapcache_waitqueue, &wait,
+						TASK_UNINTERRUPTIBLE);
+				schedule_timeout(1);
+				finish_wait(&swapcache_waitqueue, &wait);
 				delayacct_clear_flag(DELAYACCT_PF_SWAPIN);
 				goto out;
 			}
@@ -3132,8 +3144,11 @@ unlock:
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
 out:
 	/* Clear the swap cache pin for direct swapin after PTL unlock */
-	if (need_clear_cache)
+	if (need_clear_cache) {
 		swapcache_clear(si, entry);
+		if (wq_has_sleeper(&swapcache_waitqueue))
+			wake_up_all(&swapcache_waitqueue);
+	}
 	return ret;
 out_nomap:
 	mem_cgroup_cancel_charge(page, memcg, false);
@@ -3150,8 +3165,11 @@ out_release:
 		unlock_page(swapcache);
 		put_page(swapcache);
 	}
-	if (need_clear_cache)
+	if (need_clear_cache) {
 		swapcache_clear(si, entry);
+		if (wq_has_sleeper(&swapcache_waitqueue))
+			wake_up_all(&swapcache_waitqueue);
+	}
 	return ret;
 }
 
