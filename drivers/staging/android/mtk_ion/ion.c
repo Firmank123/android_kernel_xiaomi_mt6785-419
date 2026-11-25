@@ -708,18 +708,10 @@ struct ion_handle *__ion_alloc(struct ion_client *client, size_t len,
 	}
 
 	if (IS_ERR(buffer)) {
-		IONMSG("%s error 0x%lx, heap_mask: 0x%x size:%zu align:%zu.\n",
-		       __func__, (unsigned long)buffer,
-		       heap_id_mask, len, align);
-		IONMSG("error heap:0x%x\n", alloc_err_heap);
-		plist_for_each_entry(heap, &dev->heaps, node) {
-			if (!((1 << heap->id) & alloc_err_heap))
-				continue;
-			if (IS_ERR_OR_NULL(heap->debug_show))
-				continue;
-			IONMSG("heap[%s][%d] show:\n", heap->name, heap->id);
-			heap->debug_show(heap, NULL, NULL);
-		}
+		pr_warn_ratelimited(
+			"ion: %s failed err:%ld heap_mask:0x%x err_heap:0x%x size:%zu align:%zu\n",
+			__func__, PTR_ERR(buffer), heap_id_mask,
+			alloc_err_heap, len, align);
 		return ERR_CAST(buffer);
 	}
 

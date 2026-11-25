@@ -1198,6 +1198,9 @@ static int ion_mm_heap_debug_show(struct ion_heap *heap, struct seq_file *s,
 	struct ion_mm_buffer_info *bug_info;
 	unsigned long long current_ts;
 
+	if (!s)
+		return 0;
+
 	current_ts = sched_clock();
 	do_div(current_ts, 1000000);
 	ION_DUMP(s, "time 3 %lld ms\n", current_ts);
