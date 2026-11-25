@@ -45,14 +45,16 @@ GED_ERROR ged_thread_create(GED_THREAD_HANDLE *phThread,
 	psThreadData->pFunc = pFunc;
 	psThreadData->pvData = pvData;
 	psThreadData->psThread =
-		kthread_run(ged_thread_run, psThreadData, szThreadName);
+		kthread_create(ged_thread_run, psThreadData, szThreadName);
 
 	if (IS_ERR(psThreadData->psThread)) {
 		ged_free(psThreadData, sizeof(struct GED_THREAD_DATA));
 		return GED_ERROR_OOM;
 	}
 
+	set_user_nice(psThreadData->psThread, MIN_NICE);
 	*phThread = (GED_THREAD_HANDLE)psThreadData;
+	wake_up_process(psThreadData->psThread);
 
 	return GED_OK;
 }
