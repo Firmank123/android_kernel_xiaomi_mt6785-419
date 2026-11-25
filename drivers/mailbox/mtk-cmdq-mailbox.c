@@ -21,6 +21,7 @@
 #include <linux/of_device.h>
 #include <linux/atomic.h>
 #include <linux/sched/clock.h>
+#include <linux/slab.h>
 #if IS_ENABLED(CONFIG_MTK_CMDQ_MBOX_EXT)
 #include "cmdq-util.h"
 #endif
@@ -118,6 +119,8 @@ struct cmdq_task {
 	u64			exec_time;
 };
 
+static struct kmem_cache *cmdq_task_cache;
+
 struct cmdq_buf_dump {
 	struct cmdq		*cmdq;
 	struct work_struct	dump_work;
@@ -165,6 +168,8 @@ struct cmdq {
 	struct wakeup_source	*wake_lock;
 	bool			wake_locked;
 	spinlock_t		lock;
+	struct timer_list	clk_off_timer;
+	bool			clk_linger;
 	u32			token_cnt;
 	u16			*tokens;
 #if IS_ENABLED(CONFIG_MMPROFILE)
@@ -266,16 +271,22 @@ static void cmdq_lock_wake_lock(struct cmdq *cmdq, bool lock)
 
 static s32 cmdq_clk_enable(struct cmdq *cmdq)
 {
-	s32 usage, err, err_timer;
+	s32 usage, err = 0, err_timer;
 	unsigned long flags;
+	bool linger_hit = false;
 
 	cmdq_trace_ex_begin("%s", __func__);
 
 	spin_lock_irqsave(&cmdq->lock, flags);
 
 	usage = atomic_inc_return(&cmdq->usage);
+	if (usage == 1 && cmdq->clk_linger) {
+		cmdq->clk_linger = false;
+		linger_hit = true;
+	} else {
+		err = clk_enable(cmdq->clock);
+	}
 
-	err = clk_enable(cmdq->clock);
 	if (usage <= 0 || err < 0)
 		cmdq_err("ref count error after inc:%d err:%d suspend:%s",
 			usage, err, cmdq->suspended ? "true" : "false");
@@ -291,12 +302,15 @@ static s32 cmdq_clk_enable(struct cmdq *cmdq)
 #endif
 		/* make sure pm not suspend */
 		cmdq_lock_wake_lock(cmdq, true);
-		cmdq_init(cmdq);
+		if (!linger_hit)
+			cmdq_init(cmdq);
 	}
 
-	err_timer = clk_enable(cmdq->clock_timer);
-	if (err_timer < 0)
-		cmdq_err("timer clk fail:%d", err_timer);
+	if (!linger_hit) {
+		err_timer = clk_enable(cmdq->clock_timer);
+		if (err_timer < 0)
+			cmdq_err("timer clk fail:%d", err_timer);
+	}
 
 	spin_unlock_irqrestore(&cmdq->lock, flags);
 
@@ -336,6 +350,14 @@ static void cmdq_clk_disable(struct cmdq *cmdq)
 #endif
 		/* now allow pm suspend */
 		cmdq_lock_wake_lock(cmdq, false);
+		if (!cmdq->suspended && !cmdq->clk_linger) {
+			cmdq->clk_linger = true;
+			mod_timer(&cmdq->clk_off_timer,
+				  jiffies + msecs_to_jiffies(100));
+			spin_unlock_irqrestore(&cmdq->lock, flags);
+			cmdq_trace_ex_end();
+			return;
+		}
 	}
 
 	clk_disable(cmdq->clock_timer);
@@ -344,6 +366,35 @@ static void cmdq_clk_disable(struct cmdq *cmdq)
 	spin_unlock_irqrestore(&cmdq->lock, flags);
 
 	cmdq_trace_ex_end();
+}
+
+static void cmdq_clk_off_timer_cb(struct timer_list *t)
+{
+	struct cmdq *cmdq = from_timer(cmdq, t, clk_off_timer);
+	unsigned long flags;
+
+	spin_lock_irqsave(&cmdq->lock, flags);
+	if (cmdq->clk_linger && atomic_read(&cmdq->usage) == 0 &&
+	    !timer_pending(&cmdq->clk_off_timer)) {
+		cmdq->clk_linger = false;
+		clk_disable(cmdq->clock_timer);
+		clk_disable(cmdq->clock);
+	}
+	spin_unlock_irqrestore(&cmdq->lock, flags);
+}
+
+static void cmdq_clk_linger_flush(struct cmdq *cmdq)
+{
+	unsigned long flags;
+
+	del_timer_sync(&cmdq->clk_off_timer);
+	spin_lock_irqsave(&cmdq->lock, flags);
+	if (cmdq->clk_linger) {
+		cmdq->clk_linger = false;
+		clk_disable(cmdq->clock_timer);
+		clk_disable(cmdq->clock);
+	}
+	spin_unlock_irqrestore(&cmdq->lock, flags);
 }
 
 dma_addr_t cmdq_thread_get_pc(struct cmdq_thread *thread)
@@ -691,7 +742,7 @@ static void cmdq_task_exec(struct cmdq_pkt *pkt, struct cmdq_thread *thread)
 	}
 	dma_handle = buf->pa_base;
 
-	task = kzalloc(sizeof(*task), GFP_ATOMIC);
+	task = kmem_cache_zalloc(cmdq_task_cache, GFP_ATOMIC);
 	if (!task) {
 		cmdq_task_callback(pkt, -ENOMEM);
 		return;
@@ -1034,7 +1085,7 @@ static irqreturn_t cmdq_irq_handler(int irq, void *dev)
 
 	list_for_each_entry_safe(task, tmp, &removes, list_entry) {
 		list_del(&task->list_entry);
-		kfree(task);
+		kmem_cache_free(cmdq_task_cache, task);
 	}
 
 	return secure_irq ? IRQ_NONE : IRQ_HANDLED;
@@ -1141,7 +1192,7 @@ static void cmdq_thread_handle_timeout_work(struct work_struct *work_item)
 		cmdq_msg("ending not curr in timeout pkt:0x%p curr_pa:0x%08x",
 			task->pkt, pa_curr);
 		cmdq_task_exec_done(task, 0);
-		kfree(task);
+		kmem_cache_free(cmdq_task_cache, task);
 	}
 
 #if IS_ENABLED(CONFIG_MMPROFILE)
@@ -1163,7 +1214,7 @@ static void cmdq_thread_handle_timeout_work(struct work_struct *work_item)
 			struct cmdq_task, list_entry);
 		if (timeout_task == task) {
 			cmdq_task_exec_done(task, -ETIMEDOUT);
-			kfree(task);
+			kmem_cache_free(cmdq_task_cache, task);
 		} else {
 			cmdq_err("task list changed");
 		}
@@ -1189,7 +1240,7 @@ unlock_free_done:
 
 	list_for_each_entry_safe(task, tmp, &removes, list_entry) {
 		list_del(&task->list_entry);
-		kfree(task);
+		kmem_cache_free(cmdq_task_cache, task);
 	}
 }
 static void cmdq_thread_handle_timeout(struct timer_list *t)
@@ -1585,7 +1636,7 @@ void cmdq_mbox_thread_remove_task(struct mbox_chan *chan,
 		}
 
 		cmdq_task_exec_done(task, curr_task ? -ECONNABORTED : 0);
-		kfree(task);
+		kmem_cache_free(cmdq_task_cache, task);
 		break;
 	}
 
@@ -1620,7 +1671,7 @@ void cmdq_mbox_thread_remove_task(struct mbox_chan *chan,
 
 	list_for_each_entry_safe(task, tmp, &removes, list_entry) {
 		list_del(&task->list_entry);
-		kfree(task);
+		kmem_cache_free(cmdq_task_cache, task);
 	}
 }
 EXPORT_SYMBOL(cmdq_mbox_thread_remove_task);
@@ -1660,7 +1711,7 @@ static void cmdq_mbox_thread_stop(struct cmdq_thread *thread)
 	list_for_each_entry_safe(task, tmp, &thread->task_busy_list,
 		list_entry) {
 		cmdq_task_exec_done(task, -ECONNABORTED);
-		kfree(task);
+		kmem_cache_free(cmdq_task_cache, task);
 	}
 
 	cmdq_thread_disable(cmdq, thread);
@@ -1669,7 +1720,7 @@ static void cmdq_mbox_thread_stop(struct cmdq_thread *thread)
 
 	list_for_each_entry_safe(task, tmp, &removes, list_entry) {
 		list_del(&task->list_entry);
-		kfree(task);
+		kmem_cache_free(cmdq_task_cache, task);
 	}
 }
 
@@ -1683,10 +1734,13 @@ static int cmdq_suspend(struct device *dev)
 {
 	struct cmdq *cmdq = dev_get_drvdata(dev);
 	struct cmdq_thread *thread;
+	unsigned long flags;
 	int i;
 	bool task_running = false;
 
+	spin_lock_irqsave(&cmdq->lock, flags);
 	cmdq->suspended = true;
+	spin_unlock_irqrestore(&cmdq->lock, flags);
 
 	for (i = 0; i < ARRAY_SIZE(cmdq->thread); i++) {
 		thread = &cmdq->thread[i];
@@ -1702,6 +1756,7 @@ static int cmdq_suspend(struct device *dev)
 		schedule();
 	}
 
+	cmdq_clk_linger_flush(cmdq);
 	clk_unprepare(cmdq->clock_timer);
 	clk_unprepare(cmdq->clock);
 	return 0;
@@ -1710,10 +1765,13 @@ static int cmdq_suspend(struct device *dev)
 static int cmdq_resume(struct device *dev)
 {
 	struct cmdq *cmdq = dev_get_drvdata(dev);
+	unsigned long flags;
 
 	WARN_ON(clk_prepare(cmdq->clock) < 0);
 	WARN_ON(clk_prepare(cmdq->clock_timer) < 0);
+	spin_lock_irqsave(&cmdq->lock, flags);
 	cmdq->suspended = false;
+	spin_unlock_irqrestore(&cmdq->lock, flags);
 	return 0;
 }
 
@@ -1723,6 +1781,7 @@ static int cmdq_remove(struct platform_device *pdev)
 
 	destroy_workqueue(cmdq->buf_dump_wq);
 	mbox_controller_unregister(&cmdq->mbox);
+	cmdq_clk_linger_flush(cmdq);
 	clk_unprepare(cmdq->clock_timer);
 	clk_unprepare(cmdq->clock);
 	return 0;
@@ -2022,6 +2081,7 @@ static int cmdq_probe(struct platform_device *pdev)
 	cmdq->wake_lock = wakeup_source_register(NULL, "cmdq_wake_lock");
 
 	spin_lock_init(&cmdq->lock);
+	timer_setup(&cmdq->clk_off_timer, cmdq_clk_off_timer_cb, 0);
 	clk_enable(cmdq->clock);
 	cmdq_init(cmdq);
 	clk_disable(cmdq->clock);
@@ -2077,9 +2137,15 @@ static __init int cmdq_drv_init(void)
 
 	cmdq_msg("%s enter", __func__);
 
+	cmdq_task_cache = KMEM_CACHE(cmdq_task, 0);
+	if (!cmdq_task_cache)
+		return -ENOMEM;
+
 	err = platform_driver_register(&cmdq_drv);
 	if (err) {
 		cmdq_err("platform driver register failed:%d", err);
+		kmem_cache_destroy(cmdq_task_cache);
+		cmdq_task_cache = NULL;
 		return err;
 	}
 
