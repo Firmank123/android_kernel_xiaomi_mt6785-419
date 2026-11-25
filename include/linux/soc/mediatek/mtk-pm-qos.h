@@ -91,7 +91,6 @@ enum vcore_opp {
 #endif
 
 struct mtk_pm_qos_request {
-	struct list_head list_node;
 	struct plist_node node;
 	unsigned int pm_qos_class;
 	char owner[20];

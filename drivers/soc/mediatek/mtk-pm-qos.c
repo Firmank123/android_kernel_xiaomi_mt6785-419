@@ -28,13 +28,14 @@
 struct mtk_pm_qos_object {
 	struct pm_qos_constraints *constraints;
 	struct mutex qos_lock;
-	struct list_head req_list;
+	spinlock_t lock;
+	s64 total_bw;
 	char *name;
 };
 
-static DEFINE_SPINLOCK(mtk_pm_qos_lock);
-
-static struct mtk_pm_qos_object null_mtk_pm_qos;
+static struct mtk_pm_qos_object null_mtk_pm_qos = {
+	.lock = __SPIN_LOCK_UNLOCKED(null_mtk_pm_qos.lock),
+};
 
 static BLOCKING_NOTIFIER_HEAD(memory_bandwidth_notifier);
 static struct pm_qos_constraints memory_bw_constraints = {
@@ -47,8 +48,8 @@ static struct pm_qos_constraints memory_bw_constraints = {
 };
 static struct mtk_pm_qos_object memory_bandwidth_pm_qos = {
 	.constraints = &memory_bw_constraints,
-	.req_list = LIST_HEAD_INIT(memory_bandwidth_pm_qos.req_list),
 	.qos_lock = __MUTEX_INITIALIZER(memory_bandwidth_pm_qos.qos_lock),
+	.lock = __SPIN_LOCK_UNLOCKED(memory_bandwidth_pm_qos.lock),
 	.name = "memory_bandwidth",
 };
 
@@ -63,8 +64,8 @@ static struct pm_qos_constraints memory_ext_bw_constraints = {
 };
 static struct mtk_pm_qos_object memory_ext_bandwidth_pm_qos = {
 	.constraints = &memory_ext_bw_constraints,
-	.req_list = LIST_HEAD_INIT(memory_ext_bandwidth_pm_qos.req_list),
 	.qos_lock = __MUTEX_INITIALIZER(memory_ext_bandwidth_pm_qos.qos_lock),
+	.lock = __SPIN_LOCK_UNLOCKED(memory_ext_bandwidth_pm_qos.lock),
 	.name = "memory_ext_bandwidth",
 };
 
@@ -79,8 +80,8 @@ static struct pm_qos_constraints ddr_opp_constraints = {
 };
 static struct mtk_pm_qos_object ddr_opp_pm_qos = {
 	.constraints = &ddr_opp_constraints,
-	.req_list = LIST_HEAD_INIT(ddr_opp_pm_qos.req_list),
 	.qos_lock = __MUTEX_INITIALIZER(ddr_opp_pm_qos.qos_lock),
+	.lock = __SPIN_LOCK_UNLOCKED(ddr_opp_pm_qos.lock),
 	.name = "ddr_opp",
 };
 
@@ -95,8 +96,8 @@ static struct pm_qos_constraints vcore_opp_constraints = {
 };
 static struct mtk_pm_qos_object vcore_opp_pm_qos = {
 	.constraints = &vcore_opp_constraints,
-	.req_list = LIST_HEAD_INIT(vcore_opp_pm_qos.req_list),
 	.qos_lock = __MUTEX_INITIALIZER(vcore_opp_pm_qos.qos_lock),
+	.lock = __SPIN_LOCK_UNLOCKED(vcore_opp_pm_qos.lock),
 	.name = "vcore_opp",
 };
 
@@ -111,8 +112,8 @@ static struct pm_qos_constraints scp_vcore_req_constraints = {
 };
 static struct mtk_pm_qos_object scp_vcore_req_pm_qos = {
 	.constraints = &scp_vcore_req_constraints,
-	.req_list = LIST_HEAD_INIT(scp_vcore_req_pm_qos.req_list),
 	.qos_lock = __MUTEX_INITIALIZER(scp_vcore_req_pm_qos.qos_lock),
+	.lock = __SPIN_LOCK_UNLOCKED(scp_vcore_req_pm_qos.lock),
 	.name = "scp_vcore_req",
 };
 
@@ -127,8 +128,8 @@ static struct pm_qos_constraints hrt_bw_constraints = {
 };
 static struct mtk_pm_qos_object hrt_bandwidth_pm_qos = {
 	.constraints = &hrt_bw_constraints,
-	.req_list = LIST_HEAD_INIT(hrt_bandwidth_pm_qos.req_list),
 	.qos_lock = __MUTEX_INITIALIZER(hrt_bandwidth_pm_qos.qos_lock),
+	.lock = __SPIN_LOCK_UNLOCKED(hrt_bandwidth_pm_qos.lock),
 	.name = "hrt_bandwidth",
 };
 
@@ -143,8 +144,8 @@ static struct pm_qos_constraints disp_freq_constraints = {
 };
 static struct mtk_pm_qos_object disp_freq_pm_qos = {
 	.constraints = &disp_freq_constraints,
-	.req_list = LIST_HEAD_INIT(disp_freq_pm_qos.req_list),
 	.qos_lock = __MUTEX_INITIALIZER(disp_freq_pm_qos.qos_lock),
+	.lock = __SPIN_LOCK_UNLOCKED(disp_freq_pm_qos.lock),
 	.name = "disp_freq",
 };
 static BLOCKING_NOTIFIER_HEAD(mdp_freq_notifier);
@@ -158,8 +159,8 @@ static struct pm_qos_constraints mdp_freq_constraints = {
 };
 static struct mtk_pm_qos_object mdp_freq_pm_qos = {
 	.constraints = &mdp_freq_constraints,
-	.req_list = LIST_HEAD_INIT(mdp_freq_pm_qos.req_list),
 	.qos_lock = __MUTEX_INITIALIZER(mdp_freq_pm_qos.qos_lock),
+	.lock = __SPIN_LOCK_UNLOCKED(mdp_freq_pm_qos.lock),
 	.name = "mdp_freq",
 };
 static BLOCKING_NOTIFIER_HEAD(vdec_freq_notifier);
@@ -173,8 +174,8 @@ static struct pm_qos_constraints vdec_freq_constraints = {
 };
 static struct mtk_pm_qos_object vdec_freq_pm_qos = {
 	.constraints = &vdec_freq_constraints,
-	.req_list = LIST_HEAD_INIT(vdec_freq_pm_qos.req_list),
 	.qos_lock = __MUTEX_INITIALIZER(vdec_freq_pm_qos.qos_lock),
+	.lock = __SPIN_LOCK_UNLOCKED(vdec_freq_pm_qos.lock),
 	.name = "vdec_freq",
 };
 static BLOCKING_NOTIFIER_HEAD(venc_freq_notifier);
@@ -188,8 +189,8 @@ static struct pm_qos_constraints venc_freq_constraints = {
 };
 static struct mtk_pm_qos_object venc_freq_pm_qos = {
 	.constraints = &venc_freq_constraints,
-	.req_list = LIST_HEAD_INIT(venc_freq_pm_qos.req_list),
 	.qos_lock = __MUTEX_INITIALIZER(venc_freq_pm_qos.qos_lock),
+	.lock = __SPIN_LOCK_UNLOCKED(venc_freq_pm_qos.lock),
 	.name = "venc_freq",
 };
 static BLOCKING_NOTIFIER_HEAD(img_freq_notifier);
@@ -203,8 +204,8 @@ static struct pm_qos_constraints img_freq_constraints = {
 };
 static struct mtk_pm_qos_object img_freq_pm_qos = {
 	.constraints = &img_freq_constraints,
-	.req_list = LIST_HEAD_INIT(img_freq_pm_qos.req_list),
 	.qos_lock = __MUTEX_INITIALIZER(img_freq_pm_qos.qos_lock),
+	.lock = __SPIN_LOCK_UNLOCKED(img_freq_pm_qos.lock),
 	.name = "img_freq",
 };
 static BLOCKING_NOTIFIER_HEAD(cam_freq_notifier);
@@ -218,8 +219,8 @@ static struct pm_qos_constraints cam_freq_constraints = {
 };
 static struct mtk_pm_qos_object cam_freq_pm_qos = {
 	.constraints = &cam_freq_constraints,
-	.req_list = LIST_HEAD_INIT(cam_freq_pm_qos.req_list),
 	.qos_lock = __MUTEX_INITIALIZER(cam_freq_pm_qos.qos_lock),
+	.lock = __SPIN_LOCK_UNLOCKED(cam_freq_pm_qos.lock),
 	.name = "cam_freq",
 };
 static BLOCKING_NOTIFIER_HEAD(dpe_freq_notifier);
@@ -233,8 +234,8 @@ static struct pm_qos_constraints dpe_freq_constraints = {
 };
 static struct mtk_pm_qos_object dpe_freq_pm_qos = {
 	.constraints = &dpe_freq_constraints,
-	.req_list = LIST_HEAD_INIT(dpe_freq_pm_qos.req_list),
 	.qos_lock = __MUTEX_INITIALIZER(dpe_freq_pm_qos.qos_lock),
+	.lock = __SPIN_LOCK_UNLOCKED(dpe_freq_pm_qos.lock),
 	.name = "dpe_freq",
 };
 
@@ -249,12 +250,13 @@ static struct pm_qos_constraints mm0_bw_limiter_constraints = {
 };
 static struct mtk_pm_qos_object mm0_bandwidth_limiter = {
 	.constraints = &mm0_bw_limiter_constraints,
-	.req_list = LIST_HEAD_INIT(mm0_bandwidth_limiter.req_list),
 	.qos_lock = __MUTEX_INITIALIZER(mm0_bandwidth_limiter.qos_lock),
+	.lock = __SPIN_LOCK_UNLOCKED(mm0_bandwidth_limiter.lock),
 	.name = "mm0_bandwidth_limiter",
 };
 static BLOCKING_NOTIFIER_HEAD(mm1_bandwidth_limiter_notifier);
 static struct pm_qos_constraints mm1_bw_limiter_constraints = {
+	.list = PLIST_HEAD_INIT(mm1_bw_limiter_constraints.list),
 	.target_value = PM_QOS_MM_BANDWIDTH_LIMITER_DEFAULT_VALUE,
 	.default_value = PM_QOS_MM_BANDWIDTH_LIMITER_DEFAULT_VALUE,
 	.no_constraint_value = PM_QOS_MM_BANDWIDTH_LIMITER_DEFAULT_VALUE,
@@ -263,8 +265,8 @@ static struct pm_qos_constraints mm1_bw_limiter_constraints = {
 };
 static struct mtk_pm_qos_object mm1_bandwidth_limiter = {
 	.constraints = &mm1_bw_limiter_constraints,
-	.req_list = LIST_HEAD_INIT(mm1_bandwidth_limiter.req_list),
 	.qos_lock = __MUTEX_INITIALIZER(mm1_bandwidth_limiter.qos_lock),
+	.lock = __SPIN_LOCK_UNLOCKED(mm1_bandwidth_limiter.lock),
 	.name = "mm1_bandwidth_limiter",
 };
 
@@ -279,8 +281,8 @@ static struct pm_qos_constraints vvpu_opp_constraints = {
 };
 static struct mtk_pm_qos_object vvpu_opp_pm_qos = {
 	.constraints = &vvpu_opp_constraints,
-	.req_list = LIST_HEAD_INIT(vvpu_opp_pm_qos.req_list),
 	.qos_lock = __MUTEX_INITIALIZER(vvpu_opp_pm_qos.qos_lock),
+	.lock = __SPIN_LOCK_UNLOCKED(vvpu_opp_pm_qos.lock),
 	.name = "vvpu_opp",
 };
 
@@ -295,8 +297,8 @@ static struct pm_qos_constraints vmdla_opp_constraints = {
 };
 static struct mtk_pm_qos_object vmdla_opp_pm_qos = {
 	.constraints = &vmdla_opp_constraints,
-	.req_list = LIST_HEAD_INIT(vmdla_opp_pm_qos.req_list),
 	.qos_lock = __MUTEX_INITIALIZER(vmdla_opp_pm_qos.qos_lock),
+	.lock = __SPIN_LOCK_UNLOCKED(vmdla_opp_pm_qos.lock),
 	.name = "vmdla_opp",
 };
 
@@ -311,8 +313,8 @@ static struct pm_qos_constraints cpu_memory_bw_constraints = {
 };
 static struct mtk_pm_qos_object cpu_memory_bandwidth_pm_qos = {
 	.constraints = &cpu_memory_bw_constraints,
-	.req_list = LIST_HEAD_INIT(cpu_memory_bandwidth_pm_qos.req_list),
 	.qos_lock = __MUTEX_INITIALIZER(cpu_memory_bandwidth_pm_qos.qos_lock),
+	.lock = __SPIN_LOCK_UNLOCKED(cpu_memory_bandwidth_pm_qos.lock),
 	.name = "cpu_memory_bandwidth",
 };
 
@@ -327,8 +329,8 @@ static struct pm_qos_constraints gpu_memory_bw_constraints = {
 };
 static struct mtk_pm_qos_object gpu_memory_bandwidth_pm_qos = {
 	.constraints = &gpu_memory_bw_constraints,
-	.req_list = LIST_HEAD_INIT(gpu_memory_bandwidth_pm_qos.req_list),
 	.qos_lock = __MUTEX_INITIALIZER(gpu_memory_bandwidth_pm_qos.qos_lock),
+	.lock = __SPIN_LOCK_UNLOCKED(gpu_memory_bandwidth_pm_qos.lock),
 	.name = "gpu_memory_bandwidth",
 };
 
@@ -343,8 +345,8 @@ static struct pm_qos_constraints other_memory_bw_constraints = {
 };
 static struct mtk_pm_qos_object other_memory_bandwidth_pm_qos = {
 	.constraints = &other_memory_bw_constraints,
-	.req_list = LIST_HEAD_INIT(other_memory_bandwidth_pm_qos.req_list),
 	.qos_lock = __MUTEX_INITIALIZER(other_memory_bandwidth_pm_qos.qos_lock),
+	.lock = __SPIN_LOCK_UNLOCKED(other_memory_bandwidth_pm_qos.lock),
 	.name = "other_memory_bandwidth",
 };
 
@@ -359,8 +361,8 @@ static struct pm_qos_constraints power_model_ddr_req_constraints = {
 };
 static struct mtk_pm_qos_object power_model_ddr_req_pm_qos = {
 	.constraints = &power_model_ddr_req_constraints,
-	.req_list = LIST_HEAD_INIT(power_model_ddr_req_pm_qos.req_list),
 	.qos_lock = __MUTEX_INITIALIZER(power_model_ddr_req_pm_qos.qos_lock),
+	.lock = __SPIN_LOCK_UNLOCKED(power_model_ddr_req_pm_qos.lock),
 	.name = "power_model_ddr_req",
 };
 
@@ -375,8 +377,8 @@ static struct pm_qos_constraints power_model_vcore_req_constraints = {
 };
 static struct mtk_pm_qos_object power_model_vcore_req_pm_qos = {
 	.constraints = &power_model_vcore_req_constraints,
-	.req_list = LIST_HEAD_INIT(power_model_vcore_req_pm_qos.req_list),
 	.qos_lock = __MUTEX_INITIALIZER(power_model_vcore_req_pm_qos.qos_lock),
+	.lock = __SPIN_LOCK_UNLOCKED(power_model_vcore_req_pm_qos.lock),
 	.name = "power_model_vcore_req",
 };
 
@@ -391,8 +393,8 @@ static struct pm_qos_constraints vcore_dvfs_force_opp_constraints = {
 };
 static struct mtk_pm_qos_object vcore_dvfs_force_opp_pm_qos = {
 	.constraints = &vcore_dvfs_force_opp_constraints,
-	.req_list = LIST_HEAD_INIT(vcore_dvfs_force_opp_pm_qos.req_list),
 	.qos_lock = __MUTEX_INITIALIZER(vcore_dvfs_force_opp_pm_qos.qos_lock),
+	.lock = __SPIN_LOCK_UNLOCKED(vcore_dvfs_force_opp_pm_qos.lock),
 	.name = "vcore_dvfs_force_opp",
 };
 
@@ -407,8 +409,8 @@ static struct pm_qos_constraints memory_bw_test_constraints = {
 };
 static struct mtk_pm_qos_object memory_bandwidth_test_pm_qos = {
 	.constraints = &memory_bw_test_constraints,
-	.req_list = LIST_HEAD_INIT(memory_bandwidth_test_pm_qos.req_list),
 	.qos_lock = __MUTEX_INITIALIZER(memory_bandwidth_test_pm_qos.qos_lock),
+	.lock = __SPIN_LOCK_UNLOCKED(memory_bandwidth_test_pm_qos.lock),
 	.name = "memory_bandwidth_tst",
 };
 
@@ -445,10 +447,9 @@ static struct mtk_pm_qos_object *mtk_pm_qos_array[] = {
 };
 
 /* unlocked internal variant */
-static inline int  mtk_pm_qos_get_value(struct pm_qos_constraints *c)
+static inline int mtk_pm_qos_get_value(struct mtk_pm_qos_object *obj)
 {
-	struct plist_node *node;
-	int total_value = 0;
+	struct pm_qos_constraints *c = obj->constraints;
 
 	if (plist_head_empty(&c->list))
 		return c->no_constraint_value;
@@ -461,10 +462,7 @@ static inline int  mtk_pm_qos_get_value(struct pm_qos_constraints *c)
 		return plist_last(&c->list)->prio;
 
 	case PM_QOS_SUM:
-		plist_for_each(node, &c->list)
-			total_value += node->prio;
-
-		return total_value;
+		return (int)clamp_t(s64, obj->total_bw, 0, INT_MAX);
 
 	default:
 		/* runtime check for not using enum */
@@ -475,22 +473,24 @@ static inline int  mtk_pm_qos_get_value(struct pm_qos_constraints *c)
 
 void mtk_pm_qos_trace_dbg_show_request(int pm_qos_class)
 {
+	struct mtk_pm_qos_object *obj;
 	struct pm_qos_constraints *c;
 	struct mtk_pm_qos_request *req;
 	unsigned long flags;
 
-	if (pm_qos_class < MTK_PM_QOS_RESERVED
+	if (pm_qos_class <= MTK_PM_QOS_RESERVED
 		|| pm_qos_class >= MTK_PM_QOS_NUM_CLASSES)
 		return;
 
-	c = mtk_pm_qos_array[pm_qos_class]->constraints;
-	spin_lock_irqsave(&mtk_pm_qos_lock, flags);
+	obj = mtk_pm_qos_array[pm_qos_class];
+	c = obj->constraints;
+	spin_lock_irqsave(&obj->lock, flags);
 
 	plist_for_each_entry(req, &c->list, node) {
 		trace_mtk_pm_qos_update_request(req->pm_qos_class,
 			req->node.prio, req->owner);
 	}
-	spin_unlock_irqrestore(&mtk_pm_qos_lock, flags);
+	spin_unlock_irqrestore(&obj->lock, flags);
 }
 EXPORT_SYMBOL_GPL(mtk_pm_qos_trace_dbg_show_request);
 
@@ -515,7 +515,7 @@ static int mtk_pm_qos_dbg_show_requests(struct seq_file *s, void *unused)
 	}
 
 	/* Lock to ensure we have a snapshot */
-	spin_lock_irqsave(&mtk_pm_qos_lock, flags);
+	spin_lock_irqsave(&qos->lock, flags);
 	if (plist_head_empty(&c->list)) {
 		seq_puts(s, "Empty!\n");
 		goto out;
@@ -548,10 +548,10 @@ static int mtk_pm_qos_dbg_show_requests(struct seq_file *s, void *unused)
 	}
 
 	seq_printf(s, "Type=%s, Value=%d, Requests: active=%d / total=%d\n",
-		   type, mtk_pm_qos_get_value(c), active_reqs, tot_reqs);
+		   type, mtk_pm_qos_get_value(qos), active_reqs, tot_reqs);
 
 out:
-	spin_unlock_irqrestore(&mtk_pm_qos_lock, flags);
+	spin_unlock_irqrestore(&qos->lock, flags);
 	return 0;
 }
 
@@ -640,38 +640,9 @@ int mtk_pm_qos_request_active(struct mtk_pm_qos_request *req)
 }
 EXPORT_SYMBOL_GPL(mtk_pm_qos_request_active);
 
-static void mtk_pm_qos_update_target_req_list(struct mtk_pm_qos_object *c,
-		struct mtk_pm_qos_request *req, enum pm_qos_req_action action)
-{
-	unsigned long flags;
-
-	spin_lock_irqsave(&mtk_pm_qos_lock, flags);
-
-	switch (action) {
-	case PM_QOS_REMOVE_REQ:
-		list_del(&req->list_node);
-		break;
-	case PM_QOS_UPDATE_REQ:
-		/*
-		 * to change the list, we atomically remove, reinit
-		 * with new value and add, then see if the extremal
-		 * changed
-		 */
-		list_del(&req->list_node);
-	case PM_QOS_ADD_REQ:
-		list_add(&req->list_node, &c->req_list);
-		break;
-	default:
-		/* no action */
-		break;
-	}
-
-	spin_unlock_irqrestore(&mtk_pm_qos_lock, flags);
-}
-
 static inline void mtk_pm_qos_set_value(struct pm_qos_constraints *c, s32 value)
 {
-	c->target_value = value;
+	WRITE_ONCE(c->target_value, value);
 }
 
 /**
@@ -682,12 +653,13 @@ static inline void mtk_pm_qos_set_value(struct pm_qos_constraints *c, s32 value)
  */
 int mtk_pm_qos_request(unsigned int pm_qos_class)
 {
-	if (pm_qos_class >= MTK_PM_QOS_NUM_CLASSES) {
-		pr_err("%s: unknown class =%d\n", __func__, pm_qos_class);
+	if (pm_qos_class == MTK_PM_QOS_RESERVED ||
+	    pm_qos_class >= MTK_PM_QOS_NUM_CLASSES) {
+		pr_err("%s: unknown class =%u\n", __func__, pm_qos_class);
 		return PM_QOS_DEFAULT_VALUE;
 	}
 
-	return mtk_pm_qos_array[pm_qos_class]->constraints->target_value;
+	return READ_ONCE(mtk_pm_qos_array[pm_qos_class]->constraints->target_value);
 }
 EXPORT_SYMBOL_GPL(mtk_pm_qos_request);
 
@@ -695,7 +667,7 @@ EXPORT_SYMBOL_GPL(mtk_pm_qos_request);
 /**
  * pm_qos_update_target - manages the constraints list and calls the notifiers
  *  if needed
- * @c: constraints data struct
+ * @obj: qos object containing constraints and per-class lock
  * @node: request to add to the list, to update or to remove
  * @action: action to take on the constraints list
  * @value: value of the request to add or update
@@ -703,15 +675,16 @@ EXPORT_SYMBOL_GPL(mtk_pm_qos_request);
  * This function returns 1 if the aggregated constraint value has changed, 0
  *  otherwise.
  */
-static int __mtk_pm_qos_update_target(struct pm_qos_constraints *c,
+static int __mtk_pm_qos_update_target(struct mtk_pm_qos_object *obj,
 	struct plist_node *node, enum pm_qos_req_action action, int value)
 {
+	struct pm_qos_constraints *c = obj->constraints;
 	unsigned long flags;
 	int prev_value, curr_value, new_value;
 	int ret;
 
-	spin_lock_irqsave(&mtk_pm_qos_lock, flags);
-	prev_value = mtk_pm_qos_get_value(c);
+	spin_lock_irqsave(&obj->lock, flags);
+	prev_value = mtk_pm_qos_get_value(obj);
 	if (value == PM_QOS_DEFAULT_VALUE)
 		new_value = c->default_value;
 	else
@@ -719,7 +692,14 @@ static int __mtk_pm_qos_update_target(struct pm_qos_constraints *c,
 
 	switch (action) {
 	case PM_QOS_REMOVE_REQ:
+		if (c->type == PM_QOS_SUM) {
+			obj->total_bw -= node->prio;
+			if (obj->total_bw < 0)
+				obj->total_bw = 0;
+		}
 		mtk_pm_qos_plist_del(node, &c->list);
+		if (c->type == PM_QOS_SUM && plist_head_empty(&c->list))
+			obj->total_bw = 0;
 		break;
 	case PM_QOS_UPDATE_REQ:
 		/*
@@ -727,9 +707,21 @@ static int __mtk_pm_qos_update_target(struct pm_qos_constraints *c,
 		 * with new value and add, then see if the extremal
 		 * changed
 		 */
+		if (c->type == PM_QOS_SUM) {
+			obj->total_bw += (s64)new_value - node->prio;
+			if (obj->total_bw < 0)
+				obj->total_bw = 0;
+		}
 		mtk_pm_qos_plist_del(node, &c->list);
-		/* fall through */
+		plist_node_init(node, new_value);
+		mtk_pm_qos_plist_add(node, &c->list);
+		break;
 	case PM_QOS_ADD_REQ:
+		if (c->type == PM_QOS_SUM) {
+			obj->total_bw += new_value;
+			if (obj->total_bw < 0)
+				obj->total_bw = 0;
+		}
 		plist_node_init(node, new_value);
 		mtk_pm_qos_plist_add(node, &c->list);
 		break;
@@ -738,10 +730,10 @@ static int __mtk_pm_qos_update_target(struct pm_qos_constraints *c,
 		break;
 	}
 
-	curr_value = mtk_pm_qos_get_value(c);
+	curr_value = mtk_pm_qos_get_value(obj);
 	mtk_pm_qos_set_value(c, curr_value);
 
-	spin_unlock_irqrestore(&mtk_pm_qos_lock, flags);
+	spin_unlock_irqrestore(&obj->lock, flags);
 
 	if (prev_value != curr_value) {
 		ret = 1;
@@ -759,7 +751,7 @@ static void mtk_pm_qos_update_target(struct mtk_pm_qos_object *obj,
 	struct plist_node *node, enum pm_qos_req_action action, int value)
 {
 	mutex_lock(&obj->qos_lock);
-	__mtk_pm_qos_update_target(obj->constraints, node, action, value);
+	__mtk_pm_qos_update_target(obj, node, action, value);
 	mutex_unlock(&obj->qos_lock);
 }
 
@@ -785,8 +777,9 @@ void mtk_pm_qos_add_request(struct mtk_pm_qos_request *req,
 	if (!req) /*guard against callers passing in null */
 		return;
 
-	if (pm_qos_class >= MTK_PM_QOS_NUM_CLASSES) {
-		pr_err("%s: unknown class =%d\n", __func__, pm_qos_class);
+	if (pm_qos_class == MTK_PM_QOS_RESERVED ||
+	    pm_qos_class >= MTK_PM_QOS_NUM_CLASSES) {
+		pr_err("%s: unknown class =%u\n", __func__, pm_qos_class);
 		return;
 	}
 
@@ -809,10 +802,6 @@ void mtk_pm_qos_add_request(struct mtk_pm_qos_request *req,
 	mtk_pm_qos_update_target(
 		mtk_pm_qos_array[pm_qos_class],
 		&req->node, PM_QOS_ADD_REQ, value);
-
-	mtk_pm_qos_update_target_req_list(
-		mtk_pm_qos_array[req->pm_qos_class],
-		req, PM_QOS_ADD_REQ);
 }
 EXPORT_SYMBOL_GPL(mtk_pm_qos_add_request);
 
@@ -832,7 +821,8 @@ void mtk_pm_qos_update_request(struct mtk_pm_qos_request *req,
 	if (!req) /*guard against callers passing in null */
 		return;
 
-	if (!mtk_pm_qos_request_active(req)) {
+	if (!mtk_pm_qos_request_active(req) ||
+	    req->pm_qos_class >= MTK_PM_QOS_NUM_CLASSES) {
 		pr_err("%s: called for unknown object\n", __func__);
 		return;
 	}
@@ -844,10 +834,6 @@ void mtk_pm_qos_update_request(struct mtk_pm_qos_request *req,
 		mtk_pm_qos_update_target(
 			mtk_pm_qos_array[req->pm_qos_class],
 			&req->node, PM_QOS_UPDATE_REQ, new_value);
-
-		mtk_pm_qos_update_target_req_list(
-			mtk_pm_qos_array[req->pm_qos_class],
-			req, PM_QOS_UPDATE_REQ);
 	}
 }
 EXPORT_SYMBOL_GPL(mtk_pm_qos_update_request);
@@ -866,7 +852,8 @@ void mtk_pm_qos_remove_request(struct mtk_pm_qos_request *req)
 		return;
 		/* silent return to keep pcm code cleaner */
 
-	if (!mtk_pm_qos_request_active(req)) {
+	if (!mtk_pm_qos_request_active(req) ||
+	    req->pm_qos_class >= MTK_PM_QOS_NUM_CLASSES) {
 		pr_err("%s: called for unknown object\n", __func__);
 		return;
 	}
@@ -877,10 +864,6 @@ void mtk_pm_qos_remove_request(struct mtk_pm_qos_request *req)
 	mtk_pm_qos_update_target(
 		mtk_pm_qos_array[req->pm_qos_class],
 		&req->node, PM_QOS_REMOVE_REQ, PM_QOS_DEFAULT_VALUE);
-
-	mtk_pm_qos_update_target_req_list(
-		mtk_pm_qos_array[req->pm_qos_class],
-		req, PM_QOS_REMOVE_REQ);
 	memset(req, 0, sizeof(*req));
 }
 EXPORT_SYMBOL_GPL(mtk_pm_qos_remove_request);
@@ -898,8 +881,9 @@ int mtk_pm_qos_add_notifier(unsigned int pm_qos_class,
 {
 	int retval;
 
-	if (pm_qos_class >= MTK_PM_QOS_NUM_CLASSES) {
-		pr_err("%s: unknown class =%d\n", __func__, pm_qos_class);
+	if (pm_qos_class == MTK_PM_QOS_RESERVED ||
+	    pm_qos_class >= MTK_PM_QOS_NUM_CLASSES) {
+		pr_err("%s: unknown class =%u\n", __func__, pm_qos_class);
 		return -EINVAL;
 	}
 
@@ -924,8 +908,9 @@ int mtk_pm_qos_remove_notifier(unsigned int pm_qos_class,
 {
 	int retval;
 
-	if (pm_qos_class >= MTK_PM_QOS_NUM_CLASSES) {
-		pr_err("%s: unknown class =%d\n", __func__, pm_qos_class);
+	if (pm_qos_class == MTK_PM_QOS_RESERVED ||
+	    pm_qos_class >= MTK_PM_QOS_NUM_CLASSES) {
+		pr_err("%s: unknown class =%u\n", __func__, pm_qos_class);
 		return -EINVAL;
 	}
 
