@@ -171,6 +171,8 @@ static long ged_dispatch(struct file *pFile,
 {
 	int ret = -EFAULT;
 	void *pvIn = NULL, *pvOut = NULL;
+	u8 sIn[128] __aligned(8);
+	u8 sOut[128] __aligned(8);
 
 	/* We make sure the both size are GE 0 integer.
 	 */
@@ -194,7 +196,11 @@ static long ged_dispatch(struct file *pFile,
 			}
 		}
 
-		if (inputBufferSize <= KMALLOC_MAX_SIZE)
+		if (inputBufferSize > 0 &&
+			(size_t)inputBufferSize <= sizeof(sIn))
+			pvIn = sIn;
+		else if (inputBufferSize > 0 &&
+			inputBufferSize <= KMALLOC_MAX_SIZE)
 			pvIn = kmalloc(inputBufferSize, GFP_KERNEL);
 		if (pvIn == NULL)
 			goto dispatch_exit;
@@ -206,8 +212,14 @@ static long ged_dispatch(struct file *pFile,
 			goto dispatch_exit;
 		}
 
-		pvOut = kzalloc(psBridgePackageKM->i32OutBufferSize,
-			GFP_KERNEL);
+		if ((size_t)psBridgePackageKM->i32OutBufferSize <=
+			sizeof(sOut)) {
+			pvOut = sOut;
+			memset(pvOut, 0, psBridgePackageKM->i32OutBufferSize);
+		} else {
+			pvOut = kzalloc(psBridgePackageKM->i32OutBufferSize,
+				GFP_KERNEL);
+		}
 		if (pvOut == NULL)
 			goto dispatch_exit;
 
@@ -325,8 +337,10 @@ static long ged_dispatch(struct file *pFile,
 	}
 
 dispatch_exit:
-	kfree(pvIn);
-	kfree(pvOut);
+	if (pvIn && pvIn != sIn)
+		kfree(pvIn);
+	if (pvOut && pvOut != sOut)
+		kfree(pvOut);
 
 	return ret;
 }
