@@ -692,11 +692,8 @@ static int __mtk_pm_qos_update_target(struct mtk_pm_qos_object *obj,
 
 	switch (action) {
 	case PM_QOS_REMOVE_REQ:
-		if (c->type == PM_QOS_SUM) {
+		if (c->type == PM_QOS_SUM)
 			obj->total_bw -= node->prio;
-			if (obj->total_bw < 0)
-				obj->total_bw = 0;
-		}
 		mtk_pm_qos_plist_del(node, &c->list);
 		if (c->type == PM_QOS_SUM && plist_head_empty(&c->list))
 			obj->total_bw = 0;
@@ -707,21 +704,15 @@ static int __mtk_pm_qos_update_target(struct mtk_pm_qos_object *obj,
 		 * with new value and add, then see if the extremal
 		 * changed
 		 */
-		if (c->type == PM_QOS_SUM) {
+		if (c->type == PM_QOS_SUM)
 			obj->total_bw += (s64)new_value - node->prio;
-			if (obj->total_bw < 0)
-				obj->total_bw = 0;
-		}
 		mtk_pm_qos_plist_del(node, &c->list);
 		plist_node_init(node, new_value);
 		mtk_pm_qos_plist_add(node, &c->list);
 		break;
 	case PM_QOS_ADD_REQ:
-		if (c->type == PM_QOS_SUM) {
+		if (c->type == PM_QOS_SUM)
 			obj->total_bw += new_value;
-			if (obj->total_bw < 0)
-				obj->total_bw = 0;
-		}
 		plist_node_init(node, new_value);
 		mtk_pm_qos_plist_add(node, &c->list);
 		break;
