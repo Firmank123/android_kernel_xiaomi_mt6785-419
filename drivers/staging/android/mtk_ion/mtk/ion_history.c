@@ -661,7 +661,7 @@ struct task_struct *ion_history_kthread;
 wait_queue_head_t ion_history_wq;
 atomic_t ion_history_event = ATOMIC_INIT(0);
 static bool ion_history_enable;
-module_param(ion_history_enable, bool, 0644);
+module_param(ion_history_enable, bool, 0444);
 
 #define ION_HISTORY_TIME_INTERVAL (HZ)	/* 1s */
 
