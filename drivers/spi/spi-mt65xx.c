@@ -374,6 +374,19 @@ static int mtk_spi_prepare_message(struct spi_master *master,
 	reg_val &= 0x1FFFFFFF;
 	reg_val |= (chip_config->tick_delay << SPI_CFG1_GET_TICK_DLY_OFFSET);
 	writel(reg_val, mdata->base + SPI_CFG1_REG);
+
+	pm_qos_update_request(&mdata->spi_qos_request, 500);
+
+	return 0;
+}
+
+static int mtk_spi_unprepare_message(struct spi_master *master,
+				     struct spi_message *msg)
+{
+	struct mtk_spi *mdata = spi_master_get_devdata(master);
+
+	pm_qos_update_request(&mdata->spi_qos_request, PM_QOS_DEFAULT_VALUE);
+
 	return 0;
 }
 
@@ -640,13 +653,7 @@ static int mtk_spi_transfer_one(struct spi_master *master,
 				struct spi_device *spi,
 				struct spi_transfer *xfer)
 {
-	unsigned long  us;
-	struct mtk_spi *mdata = spi_master_get_devdata(master);
-
 	spi_debug("xfer->len:%d\n", xfer->len);
-	us = xfer->len * 8 * 1000 * 1000 / xfer->speed_hz;
-	us = us + 20*1000;
-	pm_qos_update_request_timeout(&mdata->spi_qos_request, 500, us);
 
 	if (master->can_dma(master, spi, xfer))
 		return mtk_spi_dma_transfer(master, spi, xfer);
@@ -683,6 +690,9 @@ static irqreturn_t mtk_spi_interrupt(int irq, void *dev_id)
 	struct spi_master *master = dev_id;
 	struct mtk_spi *mdata = spi_master_get_devdata(master);
 	struct spi_transfer *trans = mdata->cur_transfer;
+
+	if (!trans)
+		return IRQ_NONE;
 
 	reg_val = readl(mdata->base + SPI_STATUS0_REG);
 	if (reg_val & MTK_SPI_PAUSE_INT_STATUS)
@@ -798,6 +808,7 @@ static int mtk_spi_probe(struct platform_device *pdev)
 	master->mode_bits = SPI_CPOL | SPI_CPHA | SPI_LSB_FIRST;
 
 	master->prepare_message = mtk_spi_prepare_message;
+	master->unprepare_message = mtk_spi_unprepare_message;
 	master->transfer_one = mtk_spi_transfer_one;
 	master->can_dma = mtk_spi_can_dma;
 	master->setup = mtk_spi_setup;
@@ -874,57 +885,50 @@ static int mtk_spi_probe(struct platform_device *pdev)
 	if (!res) {
 		ret = -ENODEV;
 		dev_err(&pdev->dev, "failed to determine base address\n");
-		goto err_put_master;
+		goto err_remove_qos;
 	}
 
 	mdata->base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(mdata->base)) {
 		ret = PTR_ERR(mdata->base);
-		goto err_put_master;
+		goto err_remove_qos;
 	}
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0) {
 		dev_err(&pdev->dev, "failed to get irq (%d)\n", irq);
 		ret = irq;
-		goto err_put_master;
+		goto err_remove_qos;
 	}
 
 	if (!pdev->dev.dma_mask)
 		pdev->dev.dma_mask = &pdev->dev.coherent_dma_mask;
 
-	ret = devm_request_irq(&pdev->dev, irq, mtk_spi_interrupt,
-			       IRQF_TRIGGER_NONE, dev_name(&pdev->dev), master);
-	if (ret) {
-		dev_err(&pdev->dev, "failed to register irq (%d)\n", ret);
-		goto err_put_master;
-	}
-
 	mdata->parent_clk = devm_clk_get(&pdev->dev, "parent-clk");
 	if (IS_ERR(mdata->parent_clk)) {
 		ret = PTR_ERR(mdata->parent_clk);
 		dev_err(&pdev->dev, "failed to get parent-clk: %d\n", ret);
-		goto err_put_master;
+		goto err_remove_qos;
 	}
 
 	mdata->sel_clk = devm_clk_get(&pdev->dev, "sel-clk");
 	if (IS_ERR(mdata->sel_clk)) {
 		ret = PTR_ERR(mdata->sel_clk);
 		dev_err(&pdev->dev, "failed to get sel-clk: %d\n", ret);
-		goto err_put_master;
+		goto err_remove_qos;
 	}
 
 	mdata->spi_clk = devm_clk_get(&pdev->dev, "spi-clk");
 	if (IS_ERR(mdata->spi_clk)) {
 		ret = PTR_ERR(mdata->spi_clk);
 		dev_err(&pdev->dev, "failed to get spi-clk: %d\n", ret);
-		goto err_put_master;
+		goto err_remove_qos;
 	}
 
 	ret = clk_prepare_enable(mdata->spi_clk);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "failed to enable spi_clk (%d)\n", ret);
-		goto err_put_master;
+		goto err_remove_qos;
 	}
 
 	mdata->spare_clk = devm_clk_get(&pdev->dev, "spare-clk");
@@ -936,7 +940,7 @@ static int mtk_spi_probe(struct platform_device *pdev)
 			dev_err(&pdev->dev,
 				"failed to enable spare_clk (%d)\n", ret);
 			clk_disable_unprepare(mdata->spi_clk);
-			goto err_put_master;
+			goto err_remove_qos;
 		}
 	}
 
@@ -944,13 +948,24 @@ static int mtk_spi_probe(struct platform_device *pdev)
 	if (ret < 0) {
 		dev_err(&pdev->dev, "failed to clk_set_parent (%d)\n", ret);
 		clk_disable_unprepare(mdata->spi_clk);
-		goto err_put_master;
+		if (!IS_ERR(mdata->spare_clk))
+			clk_disable_unprepare(mdata->spare_clk);
+		goto err_remove_qos;
 	}
 
 	clk_disable_unprepare(mdata->spi_clk);
 	if (!IS_ERR(mdata->spare_clk))
 		clk_disable_unprepare(mdata->spare_clk);
 
+	ret = devm_request_irq(&pdev->dev, irq, mtk_spi_interrupt,
+			       IRQF_TRIGGER_NONE, dev_name(&pdev->dev), master);
+	if (ret) {
+		dev_err(&pdev->dev, "failed to register irq (%d)\n", ret);
+		goto err_remove_qos;
+	}
+
+	pm_runtime_set_autosuspend_delay(&pdev->dev, 50);
+	pm_runtime_use_autosuspend(&pdev->dev);
 	pm_runtime_enable(&pdev->dev);
 
 	ret = devm_spi_register_master(&pdev->dev, master);
@@ -1007,7 +1022,10 @@ static int mtk_spi_probe(struct platform_device *pdev)
 	return 0;
 
 err_disable_runtime_pm:
+	pm_runtime_dont_use_autosuspend(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
+err_remove_qos:
+	pm_qos_remove_request(&mdata->spi_qos_request);
 err_put_master:
 	spi_master_put(master);
 
@@ -1020,6 +1038,7 @@ static int mtk_spi_remove(struct platform_device *pdev)
 	struct mtk_spi *mdata = spi_master_get_devdata(master);
 
 	pm_qos_remove_request(&mdata->spi_qos_request);
+	pm_runtime_dont_use_autosuspend(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
 
 	mtk_spi_reset(mdata);
