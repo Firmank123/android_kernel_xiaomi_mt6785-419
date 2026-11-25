@@ -259,7 +259,7 @@ struct GED_KPI_MEOW_DVFS_FREQ_PRED {
 };
 static struct GED_KPI_MEOW_DVFS_FREQ_PRED *g_psMEOW;
 
-#define GED_KPI_TOTAL_ITEMS 64
+#define GED_KPI_TOTAL_ITEMS 256
 #define GED_KPI_UID(pid, wnd) (pid | ((unsigned long)wnd))
 #define SCREEN_IDLE_PERIOD 500000000
 
@@ -1380,11 +1380,12 @@ static void ged_kpi_work_cb(struct work_struct *psWork)
 		psHead = (struct GED_KPI_HEAD *)ged_hashtable_find(gs_hashtable
 						, (unsigned long)ulID);
 		if (psHead) {
-			psHead->i32Count -= 1;
-			list_del(&psKPI->sList);
+			if (!list_empty(&psKPI->sList)) {
+				psHead->i32Count -= 1;
+				list_del_init(&psKPI->sList);
+			}
 
-			if (psHead->i32Count < 1
-			&& (psHead->sList.next == &(psHead->sList))) {
+			if (psHead->i32Count < 1 && list_empty(&psHead->sList)) {
 				if (psHead == main_head)
 					main_head = NULL;
 #ifdef GED_ENABLE_TIMER_BASED_DVFS_MARGIN
@@ -1446,7 +1447,6 @@ static void ged_kpi_work_cb(struct work_struct *psWork)
 				goto work_cb_end;
 			}
 		}
-		memset(psKPI, 0, sizeof(struct GED_KPI));
 		psKPI->ulMask |= GED_TIMESTAMP_TYPE_D;
 		psKPI->ullTimeStampD = psTimeStamp->ullTimeStamp;
 		psKPI->pid = psTimeStamp->pid;
@@ -2617,8 +2617,10 @@ GED_ERROR ged_kpi_system_init(void)
 		int i;
 
 		memset(g_asKPI, 0, sizeof(g_asKPI));
-		for (i = 0; i < GED_KPI_TOTAL_ITEMS; i++)
+		for (i = 0; i < GED_KPI_TOTAL_ITEMS; i++) {
 			g_asKPI[i].ullWnd = 0x0 - 1;
+			INIT_LIST_HEAD(&g_asKPI[i].sList);
+		}
 		gs_hashtable = ged_hashtable_create(10);
 		pr_info("[Hans] ged_kpi init done");
 #ifdef GED_ENABLE_TIMER_BASED_DVFS_MARGIN
