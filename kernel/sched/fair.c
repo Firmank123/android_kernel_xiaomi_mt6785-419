@@ -6636,8 +6636,8 @@ int find_best_idle_cpu(struct task_struct *p, bool prefer_idle)
 	struct cpumask *tsk_cpus_allow = &p->cpus_allowed;
 	unsigned long min_cap = capacity_orig_of(0);
 	unsigned long task_util_clamped = uclamp_task_util(p);
-	bool prefer_big = prefer_idle &&
-		(task_util_clamped * capacity_margin > min_cap * 1024);
+	bool fits_min = (task_util_clamped * capacity_margin <= min_cap * 1024);
+	bool prefer_big = !fits_min || (prefer_idle && uclamp_boosted(p));
 	unsigned long best_cap = 0;
 	unsigned int min_exit_lat = UINT_MAX;
 	struct perf_order_domain *domain;
@@ -6803,7 +6803,8 @@ ___select_idle_sibling(struct task_struct *p, int prev_cpu, int new_cpu)
 {
 	if (sched_feat(SCHED_MTK_EAS)) {
 #if defined(CONFIG_SCHED_TUNE) || defined(CONFIG_UCLAMP_TASK)
-		bool prefer_idle = uclamp_latency_sensitive(p) > 0;
+		bool prefer_idle = uclamp_latency_sensitive(p) ||
+				   uclamp_boosted(p);
 #else
 		bool prefer_idle = true;
 #endif
