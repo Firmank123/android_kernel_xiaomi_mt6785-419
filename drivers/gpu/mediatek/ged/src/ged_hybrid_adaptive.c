@@ -97,7 +97,7 @@ static void ged_ha_copy_trace_locked(struct ged_ha_trace_record *record)
 
 static void ged_ha_emit_trace(const struct ged_ha_trace_record *record)
 {
-	trace_printk("ged_hybrid_adaptive mode=%s state=%s reason=%s "
+	pr_debug("ged_hybrid_adaptive mode=%s state=%s reason=%s "
 		"generation=%llu expiry_ns=%llu\n",
 		ged_ha_mode_name(record->mode),
 		ged_ha_state_name(record->state),
