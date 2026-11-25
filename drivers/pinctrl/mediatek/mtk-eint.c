@@ -87,8 +87,7 @@ static int mtk_eint_flip_edge(struct mtk_eint *eint, int hwirq)
 	int start_level, curr_level;
 	unsigned int reg_offset;
 	u32 mask = BIT(hwirq & 0x1f);
-	u32 port = (hwirq >> 5) & eint->hw->port_mask;
-	void __iomem *reg = eint->base + (port << 2);
+	void __iomem *reg;
 
 	curr_level = eint->gpio_xlate->get_gpio_state(eint->pctl, hwirq);
 
@@ -98,7 +97,9 @@ static int mtk_eint_flip_edge(struct mtk_eint *eint, int hwirq)
 			reg_offset = eint->regs->pol_clr;
 		else
 			reg_offset = eint->regs->pol_set;
-		writel(mask, reg + reg_offset);
+
+		reg = mtk_eint_get_offset(eint, hwirq, reg_offset);
+		writel(mask, reg);
 
 		curr_level = eint->gpio_xlate->get_gpio_state(eint->pctl,
 							      hwirq);
