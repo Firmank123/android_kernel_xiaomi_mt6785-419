@@ -549,6 +549,7 @@ void mcdi_heart_beat_log_dump(void)
 	static struct mtk_mcdi_buf buf;
 	int i;
 	unsigned long long mcdi_heart_beat_log_curr = 0;
+	unsigned long long prev;
 	unsigned long flags;
 	bool dump_log = false;
 	unsigned long mcdi_cnt;
@@ -558,17 +559,29 @@ void mcdi_heart_beat_log_dump(void)
 	unsigned int cluster_mask = 0;
 	struct mcdi_feature_status feature_stat;
 
+	mcdi_heart_beat_log_curr = idle_get_current_time_ms();
+	prev = READ_ONCE(mcdi_heart_beat_log_prev);
+	if (likely(prev != 0 &&
+		   (mcdi_heart_beat_log_curr <= prev ||
+		    mcdi_heart_beat_log_curr - prev <=
+		    READ_ONCE(mcdi_heart_beat_log_dump_thd))))
+		return;
+
 	spin_lock_irqsave(&mcdi_heart_beat_spin_lock, flags);
 
 	mcdi_heart_beat_log_curr = idle_get_current_time_ms();
+	prev = READ_ONCE(mcdi_heart_beat_log_prev);
 
-	if (mcdi_heart_beat_log_prev == 0)
-		mcdi_heart_beat_log_prev = mcdi_heart_beat_log_curr;
+	if (prev == 0) {
+		prev = mcdi_heart_beat_log_curr;
+		WRITE_ONCE(mcdi_heart_beat_log_prev, prev);
+	}
 
-	if ((mcdi_heart_beat_log_curr - mcdi_heart_beat_log_prev)
-			> mcdi_heart_beat_log_dump_thd) {
+	if (mcdi_heart_beat_log_curr > prev &&
+	    (mcdi_heart_beat_log_curr - prev) >
+	    mcdi_heart_beat_log_dump_thd) {
 		dump_log = true;
-		mcdi_heart_beat_log_prev = mcdi_heart_beat_log_curr;
+		WRITE_ONCE(mcdi_heart_beat_log_prev, mcdi_heart_beat_log_curr);
 	}
 
 	spin_unlock_irqrestore(&mcdi_heart_beat_spin_lock, flags);
