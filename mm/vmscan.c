@@ -39,7 +39,7 @@
 #include <linux/compaction.h>
 #include <linux/notifier.h>
 #include <linux/rwsem.h>
-#include <linux/delay.h>
+#include <linux/jiffies.h>
 #include <linux/kthread.h>
 #include <linux/freezer.h>
 #include <linux/memcontrol.h>
@@ -1940,8 +1940,10 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 		if (stalled)
 			return 0;
 
-		/* wait a bit for the reclaimer. */
-		msleep(100);
+		/* Wait for an isolator to return its pages. */
+		wait_event_timeout(pgdat->reclaim_isolated_wait,
+				   !too_many_isolated(pgdat, file, sc),
+				   msecs_to_jiffies(100) + 1);
 		stalled = true;
 
 		/* We are about to die and free our memory. Return now. */
@@ -2004,6 +2006,9 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
 
 	spin_unlock_irq(&pgdat->lru_lock);
+
+	if (nr_taken && wq_has_sleeper(&pgdat->reclaim_isolated_wait))
+		wake_up_all(&pgdat->reclaim_isolated_wait);
 
 	mem_cgroup_uncharge_list(&page_list);
 	free_unref_page_list(&page_list);
@@ -2196,6 +2201,9 @@ static void shrink_active_list(unsigned long nr_to_scan,
 	nr_deactivate = move_active_pages_to_lru(lruvec, &l_inactive, &l_hold, lru - LRU_ACTIVE);
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
 	spin_unlock_irq(&pgdat->lru_lock);
+
+	if (nr_taken && wq_has_sleeper(&pgdat->reclaim_isolated_wait))
+		wake_up_all(&pgdat->reclaim_isolated_wait);
 
 	mem_cgroup_uncharge_list(&l_hold);
 	free_unref_page_list(&l_hold);
