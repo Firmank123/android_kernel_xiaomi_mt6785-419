@@ -408,6 +408,8 @@ struct mt_i2c {
 	u16 irq_stat;	/* interrupt status */
 	u16 i3c_en;     /* i3c enalbe */
 	unsigned int speed_hz;/* The speed in transfer */
+	unsigned int last_speed_hz;
+	unsigned int last_clk_src_in_hz;
 	unsigned int clk_src_div;
 	unsigned int aed;/* aed value from dt */
 	spinlock_t cg_lock;

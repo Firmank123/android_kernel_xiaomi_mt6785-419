@@ -297,32 +297,98 @@ static inline void record_i2c_dma_info(struct mt_i2c *i2c) {}
 static inline void record_i2c_info(struct mt_i2c *i2c, int tmo) {}
 #endif
 
+static int mt_i2c_clock_prepare(struct mt_i2c *i2c)
+{
+#if !defined(CONFIG_MT_I2C_FPGA_ENABLE)
+	int ret;
+
+	ret = clk_prepare(i2c->clk_dma);
+	if (ret)
+		return ret;
+
+	if (i2c->clk_pal != NULL) {
+		ret = clk_prepare(i2c->clk_pal);
+		if (ret)
+			goto err_pal;
+	}
+
+	if (i2c->clk_arb != NULL) {
+		ret = clk_prepare(i2c->clk_arb);
+		if (ret)
+			goto err_arb;
+	}
+
+	ret = clk_prepare(i2c->clk_main);
+	if (ret)
+		goto err_main;
+
+	if (i2c->have_pmic) {
+		ret = clk_prepare(i2c->clk_pmic);
+		if (ret)
+			goto err_pmic;
+	}
+
+	return 0;
+
+err_pmic:
+	clk_unprepare(i2c->clk_main);
+err_main:
+	if (i2c->clk_arb)
+		clk_unprepare(i2c->clk_arb);
+err_arb:
+	if (i2c->clk_pal)
+		clk_unprepare(i2c->clk_pal);
+err_pal:
+	clk_unprepare(i2c->clk_dma);
+	return ret;
+#else
+	return 0;
+#endif
+}
+
+static void mt_i2c_clock_unprepare(struct mt_i2c *i2c)
+{
+#if !defined(CONFIG_MT_I2C_FPGA_ENABLE)
+	if (i2c->have_pmic)
+		clk_unprepare(i2c->clk_pmic);
+
+	clk_unprepare(i2c->clk_main);
+	if (i2c->clk_pal != NULL)
+		clk_unprepare(i2c->clk_pal);
+
+	if (i2c->clk_arb != NULL)
+		clk_unprepare(i2c->clk_arb);
+
+	clk_unprepare(i2c->clk_dma);
+#endif
+}
+
 static int mt_i2c_clock_enable(struct mt_i2c *i2c)
 {
 #if !defined(CONFIG_MT_I2C_FPGA_ENABLE)
 	int ret = 0;
 
-	ret = clk_prepare_enable(i2c->clk_dma);
+	ret = clk_enable(i2c->clk_dma);
 	if (ret)
 		return ret;
 
 	if (i2c->clk_pal != NULL) {
-		ret = clk_prepare_enable(i2c->clk_pal);
+		ret = clk_enable(i2c->clk_pal);
 		if (ret)
-			goto err_main;
+			goto err_pal;
 	}
 
 	if (i2c->clk_arb != NULL) {
-		ret = clk_prepare_enable(i2c->clk_arb);
+		ret = clk_enable(i2c->clk_arb);
 		if (ret)
-			return ret;
+			goto err_arb;
 	}
-	ret = clk_prepare_enable(i2c->clk_main);
+	ret = clk_enable(i2c->clk_main);
 	if (ret)
 		goto err_main;
 
 	if (i2c->have_pmic) {
-		ret = clk_prepare_enable(i2c->clk_pmic);
+		ret = clk_enable(i2c->clk_pmic);
 		if (ret)
 			goto err_pmic;
 	}
@@ -341,13 +407,17 @@ static int mt_i2c_clock_enable(struct mt_i2c *i2c)
 
 err_cg:
 	if (i2c->have_pmic)
-		clk_disable_unprepare(i2c->clk_pmic);
+		clk_disable(i2c->clk_pmic);
 err_pmic:
-	clk_disable_unprepare(i2c->clk_main);
+	clk_disable(i2c->clk_main);
 err_main:
 	if (i2c->clk_arb)
-		clk_disable_unprepare(i2c->clk_arb);
-	clk_disable_unprepare(i2c->clk_dma);
+		clk_disable(i2c->clk_arb);
+err_arb:
+	if (i2c->clk_pal)
+		clk_disable(i2c->clk_pal);
+err_pal:
+	clk_disable(i2c->clk_dma);
 	return ret;
 #else
 	return 0;
@@ -358,16 +428,16 @@ static void mt_i2c_clock_disable(struct mt_i2c *i2c)
 {
 #if !defined(CONFIG_MT_I2C_FPGA_ENABLE)
 	if (i2c->have_pmic)
-		clk_disable_unprepare(i2c->clk_pmic);
+		clk_disable(i2c->clk_pmic);
 
-	clk_disable_unprepare(i2c->clk_main);
+	clk_disable(i2c->clk_main);
 	if (i2c->clk_pal != NULL)
-		clk_disable_unprepare(i2c->clk_pal);
+		clk_disable(i2c->clk_pal);
 
 	if (i2c->clk_arb != NULL)
-		clk_disable_unprepare(i2c->clk_arb);
+		clk_disable(i2c->clk_arb);
 
-	clk_disable_unprepare(i2c->clk_dma);
+	clk_disable(i2c->clk_dma);
 	spin_lock(&i2c->cg_lock);
 	i2c->cg_cnt--;
 	spin_unlock(&i2c->cg_lock);
@@ -558,6 +628,10 @@ static int i2c_set_speed(struct mt_i2c *i2c, unsigned int clk_src_in_hz)
 	else
 		speed_hz = i2c->speed_hz;
 
+	if (speed_hz == i2c->last_speed_hz &&
+	    clk_src_in_hz == i2c->last_clk_src_in_hz)
+		return 0;
+
 	if (speed_hz > MAX_FS_PLUS_MODE_SPEED && !i2c->hs_only) {
 		/* Set the hign speed mode register */
 		ret = mtk_i2c_calculate_speed(i2c, clk_src_in_hz,
@@ -617,6 +691,9 @@ static int i2c_set_speed(struct mt_i2c *i2c, unsigned int clk_src_in_hz)
 		/* Disable the high speed transaction */
 		i2c->high_speed_reg = I2C_TIME_CLR_VALUE;
 	}
+
+	i2c->last_speed_hz = speed_hz;
+	i2c->last_clk_src_in_hz = clk_src_in_hz;
 
 	return 0;
 }
@@ -1906,10 +1983,15 @@ static int mt_i2c_probe(struct platform_device *pdev)
 		dev_info(&pdev->dev, "Failed to set the speed\n");
 		return -EINVAL;
 	}
+	ret = mt_i2c_clock_prepare(i2c);
+	if (ret) {
+		dev_info(&pdev->dev, "clock prepare failed!\n");
+		return ret;
+	}
 	ret = mt_i2c_clock_enable(i2c);
 	if (ret) {
 		dev_info(&pdev->dev, "clock enable failed!\n");
-		return ret;
+		goto err_unprepare_clk;
 	}
 	mt_i2c_init_hw(i2c);
 
@@ -1920,7 +2002,7 @@ static int mt_i2c_probe(struct platform_device *pdev)
 	if (ret < 0) {
 		dev_info(&pdev->dev,
 			"Request I2C IRQ %d fail\n", i2c->irqnr);
-		return ret;
+		goto err_unprepare_clk;
 	}
 
 	if (i2c->ch_offset_default)
@@ -1932,7 +2014,8 @@ static int mt_i2c_probe(struct platform_device *pdev)
 
 	if (i2c->dma_buf.vaddr == NULL) {
 		dev_info(&pdev->dev, "dma_alloc_coherent fail\n");
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto err_unprepare_clk;
 	}
 	i2c_set_adapdata(&i2c->adap, i2c);
 	/* ret = i2c_add_adapter(&i2c->adap); */
@@ -1940,7 +2023,7 @@ static int mt_i2c_probe(struct platform_device *pdev)
 	if (ret) {
 		dev_info(&pdev->dev, "Failed to add i2c bus to i2c core\n");
 		free_i2c_dma_bufs(i2c);
-		return ret;
+		goto err_unprepare_clk;
 	}
 	platform_set_drvdata(pdev, i2c);
 
@@ -1948,6 +2031,10 @@ static int mt_i2c_probe(struct platform_device *pdev)
 		pr_info("Map cg regs successfully.\n");
 
 	return 0;
+
+err_unprepare_clk:
+	mt_i2c_clock_unprepare(i2c);
+	return ret;
 }
 
 static int mt_i2c_remove(struct platform_device *pdev)
@@ -1956,6 +2043,7 @@ static int mt_i2c_remove(struct platform_device *pdev)
 
 	i2c_del_adapter(&i2c->adap);
 	free_i2c_dma_bufs(i2c);
+	mt_i2c_clock_unprepare(i2c);
 	platform_set_drvdata(pdev, NULL);
 	return 0;
 }
