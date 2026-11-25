@@ -21,7 +21,6 @@
 #include "mtk_menu.h"
 
 static bool screen_on;
-static DEFINE_SPINLOCK(mtk_menu_spin_lock);
 
 bool __attribute__((weak)) system_idle_hint_result(void)
 {
@@ -50,7 +49,6 @@ static int mtk_menu_fb_notifier_callback(struct notifier_block *self,
 {
 	struct fb_event *evdata = data;
 	int blank;
-	unsigned long flags = 0;
 
 	if (event != FB_EVENT_BLANK)
 		return 0;
@@ -59,22 +57,10 @@ static int mtk_menu_fb_notifier_callback(struct notifier_block *self,
 
 	switch (blank) {
 	case FB_BLANK_UNBLANK:
-
-		spin_lock_irqsave(&mtk_menu_spin_lock, flags);
-
-		screen_on = true;
-
-		spin_unlock_irqrestore(&mtk_menu_spin_lock, flags);
-
+		WRITE_ONCE(screen_on, true);
 		break;
 	case FB_BLANK_POWERDOWN:
-
-		spin_lock_irqsave(&mtk_menu_spin_lock, flags);
-
-		screen_on = false;
-
-		spin_unlock_irqrestore(&mtk_menu_spin_lock, flags);
-
+		WRITE_ONCE(screen_on, false);
 		break;
 	default:
 		break;
@@ -89,16 +75,7 @@ static struct notifier_block mtk_menu_fb_notifier = {
 
 static bool is_screen_on(void)
 {
-	bool result = false;
-	unsigned long flags = 0;
-
-	spin_lock_irqsave(&mtk_menu_spin_lock, flags);
-
-	result = screen_on;
-
-	spin_unlock_irqrestore(&mtk_menu_spin_lock, flags);
-
-	return result;
+	return READ_ONCE(screen_on);
 }
 
 /*
@@ -381,27 +358,20 @@ static int menu_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 {
 	struct menu_device *data = this_cpu_ptr(&menu_devices);
 	int latency_req = pm_qos_request(PM_QOS_CPU_DMA_LATENCY);
+	int user_latency_req = latency_req;
 	int i;
 	int first_idx;
 	int idx;
 #ifdef USE_INTERACTIVITY_REQ
 	unsigned int interactivity_req;
 #endif
-#ifdef USE_TYPICAL_INTERVAL
 	unsigned int expected_interval;
-#endif
 	unsigned long nr_iowaiters, cpu_load;
 	ktime_t delta_next;
 
 	if (data->needs_update) {
 		menu_update(drv, dev);
 		data->needs_update = 0;
-	}
-
-	/* Special case when user has set very strict latency requirement */
-	if (unlikely(latency_req == 0)) {
-		*stop_tick = false;
-		return 0;
 	}
 
 	/* determine the expected residency time, round up */
@@ -428,6 +398,43 @@ static int menu_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 	data->predicted_us = data->next_timer_us;
 #endif
 
+	/* Find the shortest idle state that is not disabled */
+	idx = -1;
+	for (i = 0; i < drv->state_count; i++) {
+		if (!drv->states[i].disabled && !dev->states_usage[i].disable) {
+			idx = i;
+			break;
+		}
+	}
+	if (idx == -1) {
+		*stop_tick = false;
+		data->last_state_idx = 0;
+		return 0;
+	}
+
+	/* Find the first deeper enabled state, if any */
+	for (i = idx + 1; i < drv->state_count; i++) {
+		if (!drv->states[i].disabled && !dev->states_usage[i].disable)
+			break;
+	}
+
+	/*
+	 * Return the shallowest enabled state early if there is only one
+	 * usable state, latency is strictly constrained to 0, or the next
+	 * timer expires before any deeper enabled state breaks even.
+	 */
+	if (drv->state_count <= 1 || i >= drv->state_count ||
+	    unlikely(latency_req == 0) ||
+	    data->next_timer_us < drv->states[i].target_residency) {
+		if ((drv->states[idx].flags & CPUIDLE_FLAG_POLLING) ||
+		    (data->next_timer_us < TICK_USEC &&
+		     !tick_nohz_tick_stopped()))
+			*stop_tick = false;
+
+		data->last_state_idx = idx;
+		return idx;
+	}
+
 #ifdef USE_TYPICAL_INTERVAL
 	if (!is_all_cpu_idle_criteria()) {
 		expected_interval = get_typical_interval(data);
@@ -439,12 +446,12 @@ static int menu_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 	}
 #endif
 
-	first_idx = 0;
-	if (drv->states[0].flags & CPUIDLE_FLAG_POLLING) {
+	first_idx = idx;
+	if (drv->states[idx].flags & CPUIDLE_FLAG_POLLING) {
 		struct cpuidle_state *s;
 		unsigned int polling_threshold;
 
-		s = &drv->states[1];
+		s = &drv->states[i];
 		/*
 		 * We want to default to C1 (hlt), not to busy polling
 		 * unless the timer is happening really really soon, or
@@ -453,9 +460,8 @@ static int menu_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 		polling_threshold =
 			max_t(unsigned int, 20, s->target_residency);
 		if (data->next_timer_us > polling_threshold &&
-		    latency_req > s->exit_latency && !s->disabled &&
-		    !dev->states_usage[1].disable)
-			first_idx = 1;
+		    latency_req > s->exit_latency)
+			first_idx = i;
 	}
 
 	if (tick_nohz_tick_stopped()) {
@@ -506,9 +512,12 @@ static int menu_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 			 * If we break out of the loop for latency reasons, use
 			 * the target residency of the selected state as the
 			 * expected idle duration so that the tick is retained
-			 * as long as that target residency is low enough.
+			 * as long as that target residency is low enough, unless
+			 * the static PM QoS limit already forbids this state.
 			 */
-			expected_interval = drv->states[idx].target_residency;
+			if (s->exit_latency <= user_latency_req)
+				expected_interval =
+					drv->states[idx].target_residency;
 			break;
 		}
 		idx = i;
@@ -522,7 +531,7 @@ static int menu_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 	 * expected idle duration is shorter than the tick period length.
 	 */
 	if ((drv->states[idx].flags & CPUIDLE_FLAG_POLLING) ||
-	    expected_interval < TICK_USEC) {
+	    (expected_interval < TICK_USEC && !tick_nohz_tick_stopped())) {
 		unsigned int delta_next_us = ktime_to_us(delta_next);
 
 		*stop_tick = false;
@@ -707,7 +716,6 @@ static struct cpuidle_governor menu_governor = {
  */
 static int __init init_menu(void)
 {
-	unsigned long flags = 0;
 	int r;
 
 	/* Register FB notifier */
@@ -717,11 +725,7 @@ static int __init init_menu(void)
 		return r;
 	}
 
-	spin_lock_irqsave(&mtk_menu_spin_lock, flags);
-
-	screen_on = true;
-
-	spin_unlock_irqrestore(&mtk_menu_spin_lock, flags);
+	WRITE_ONCE(screen_on, true);
 
 	mtk_cpuidle_framework_init();
 
