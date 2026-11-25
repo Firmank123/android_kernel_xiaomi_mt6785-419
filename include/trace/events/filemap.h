@@ -54,6 +54,41 @@ DEFINE_EVENT(mm_filemap_op_page_cache, mm_filemap_add_to_page_cache,
 	TP_ARGS(page)
 	);
 
+TRACE_EVENT(mm_filemap_workingset_refault,
+
+	TP_PROTO(struct page *page, unsigned long distance, unsigned long limit,
+		 int eviction_memcg, bool shadow_workingset),
+
+	TP_ARGS(page, distance, limit, eviction_memcg, shadow_workingset),
+
+	TP_STRUCT__entry(
+		__field(dev_t, s_dev)
+		__field(unsigned long, i_ino)
+		__field(unsigned long, index)
+		__field(unsigned long, distance)
+		__field(unsigned long, limit)
+		__field(int, eviction_memcg)
+		__field(bool, shadow_workingset)
+	),
+
+	TP_fast_assign(
+		struct inode *inode = page->mapping->host;
+
+		__entry->s_dev = inode->i_sb ? inode->i_sb->s_dev : inode->i_rdev;
+		__entry->i_ino = inode->i_ino;
+		__entry->index = page->index;
+		__entry->distance = distance;
+		__entry->limit = limit;
+		__entry->eviction_memcg = eviction_memcg;
+		__entry->shadow_workingset = shadow_workingset;
+	),
+
+	TP_printk("dev=%d:%d ino=0x%lx index=%lu distance=%lu limit=%lu eviction_memcg=%d shadow_workingset=%d",
+		  MAJOR(__entry->s_dev), MINOR(__entry->s_dev), __entry->i_ino,
+		  __entry->index, __entry->distance, __entry->limit,
+		  __entry->eviction_memcg, __entry->shadow_workingset)
+);
+
 TRACE_EVENT(filemap_set_wb_err,
 		TP_PROTO(struct address_space *mapping, errseq_t eseq),
 

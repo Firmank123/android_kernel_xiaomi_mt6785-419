@@ -40,6 +40,7 @@
 #include <linux/notifier.h>
 #include <linux/rwsem.h>
 #include <linux/jiffies.h>
+#include <linux/timekeeping.h>
 #include <linux/kthread.h>
 #include <linux/freezer.h>
 #include <linux/memcontrol.h>
@@ -1939,13 +1940,24 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 	bool stalled = false;
 
 	while (unlikely(too_many_isolated(pgdat, file, sc))) {
+		u64 wait_start;
+		bool trace_wait;
+
 		if (stalled)
 			return 0;
+
+		trace_wait = trace_mm_vmscan_isolation_wait_enabled();
+		if (trace_wait)
+			wait_start = ktime_get_ns();
 
 		/* Wait for an isolator to return its pages. */
 		wait_event_timeout(pgdat->reclaim_isolated_wait,
 				   !too_many_isolated(pgdat, file, sc),
 				   msecs_to_jiffies(100) + 1);
+		if (trace_wait)
+			trace_mm_vmscan_isolation_wait(pgdat->node_id, file,
+						       sc->gfp_mask,
+						       ktime_get_ns() - wait_start);
 		stalled = true;
 
 		/* We are about to die and free our memory. Return now. */

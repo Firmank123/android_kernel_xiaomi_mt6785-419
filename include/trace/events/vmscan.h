@@ -103,6 +103,31 @@ TRACE_EVENT(mm_vmscan_wakeup_kswapd,
 		show_gfp_flags(__entry->gfp_flags))
 );
 
+TRACE_EVENT(mm_vmscan_isolation_wait,
+
+	TP_PROTO(int nid, bool file, gfp_t gfp_flags, u64 duration_ns),
+
+	TP_ARGS(nid, file, gfp_flags, duration_ns),
+
+	TP_STRUCT__entry(
+		__field(int, nid)
+		__field(bool, file)
+		__field(gfp_t, gfp_flags)
+		__field(u64, duration_ns)
+	),
+
+	TP_fast_assign(
+		__entry->nid = nid;
+		__entry->file = file;
+		__entry->gfp_flags = gfp_flags;
+		__entry->duration_ns = duration_ns;
+	),
+
+	TP_printk("nid=%d file=%d gfp_flags=%s duration_ns=%llu",
+		  __entry->nid, __entry->file,
+		  show_gfp_flags(__entry->gfp_flags), __entry->duration_ns)
+);
+
 DECLARE_EVENT_CLASS(mm_vmscan_direct_reclaim_begin_template,
 
 	TP_PROTO(int order, int may_writepage, gfp_t gfp_flags, int classzone_idx),

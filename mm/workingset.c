@@ -16,6 +16,8 @@
 #include <linux/fs.h>
 #include <linux/mm.h>
 
+#include <trace/events/filemap.h>
+
 /*
  *		Double CLOCK lists
  *
@@ -372,6 +374,8 @@ void workingset_refault(struct page *page, void *shadow)
 	refault_distance = (refault - eviction) & EVICTION_MASK;
 
 	inc_lruvec_state(lruvec, WORKINGSET_REFAULT);
+	trace_mm_filemap_workingset_refault(page, refault_distance,
+					  workingset_size, memcgid, workingset);
 
 	/*
 	 * Compare the distance to the existing workingset size. We
