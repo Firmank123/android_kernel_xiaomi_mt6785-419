@@ -32,6 +32,7 @@
 #include "mtk/ion_drv.h"
 #include "mtk_ion.h"
 #include <linux/delay.h>
+#include <linux/moduleparam.h>
 #include <linux/time.h>
 
 /* ============================================== */
@@ -659,6 +660,8 @@ static struct history_record *g_buffer_history;
 struct task_struct *ion_history_kthread;
 wait_queue_head_t ion_history_wq;
 atomic_t ion_history_event = ATOMIC_INIT(0);
+static bool ion_history_enable;
+module_param(ion_history_enable, bool, 0644);
 
 #define ION_HISTORY_TIME_INTERVAL (HZ)	/* 1s */
 
@@ -826,6 +829,9 @@ int ion_history_init(void)
 #endif
 
 	init_waitqueue_head(&ion_history_wq);
+	if (!ion_history_enable)
+		return 0;
+
 	ion_history_kthread = kthread_run(ion_history_record, NULL, "%s",
 					  "ion_history");
 	if (IS_ERR(ion_history_kthread)) {
@@ -840,6 +846,9 @@ int ion_history_init(void)
 
 void ion_history_count_kick(bool allc, size_t len)
 {
+	if (!READ_ONCE(ion_history_enable) || !ion_history_kthread)
+		return;
+
 	if (atomic_read(&ion_history_event) == 0) {
 		atomic_set(&ion_history_event, 1);
 		wake_up_interruptible(&ion_history_wq);
