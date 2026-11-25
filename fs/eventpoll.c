@@ -726,17 +726,17 @@ static __poll_t ep_scan_ready_list(struct eventpoll *ep,
 		}
 	}
 	/*
-	 * We need to set back ep->ovflist to EP_UNACTIVE_PTR, so that after
-	 * releasing the lock, events will be queued in the normal way inside
-	 * ep->rdllist.
-	 */
-	WRITE_ONCE(ep->ovflist, EP_UNACTIVE_PTR);
-
-	/*
 	 * Quickly re-inject items left on "txlist".
 	 */
 	list_splice(&txlist, &ep->rdllist);
 	__pm_relax(ep->ws);
+
+	/*
+	 * We need to set back ep->ovflist to EP_UNACTIVE_PTR, so that after
+	 * releasing the lock, events will be queued in the normal way inside
+	 * ep->rdllist. Publish after splicing txlist for lockless readers.
+	 */
+	smp_store_release(&ep->ovflist, EP_UNACTIVE_PTR);
 
 	if (!list_empty(&ep->rdllist)) {
 		/*
@@ -1166,11 +1166,8 @@ static int ep_poll_callback(wait_queue_entry_t *wait, unsigned mode, int sync, v
 			}
 
 		}
-		goto out_unlock;
-	}
-
-	/* If this file is already in the ready list we exit soon */
-	if (!ep_is_linked(epi)) {
+	} else if (!ep_is_linked(epi)) {
+		/* If this file is already in the ready list we exit soon */
 		list_add_tail(&epi->rdllink, &ep->rdllist);
 		ep_pm_stay_awake_rcu(epi);
 	}
