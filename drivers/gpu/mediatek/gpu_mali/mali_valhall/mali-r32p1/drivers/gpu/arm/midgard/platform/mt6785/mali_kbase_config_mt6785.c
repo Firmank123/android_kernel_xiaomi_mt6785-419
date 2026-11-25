@@ -37,6 +37,7 @@ static int g_is_suspend;
 static void __mtk_check_MFG_bus_idle(void)
 {
     u32 val;
+    int retry;
 
     /* MFG_QCHANNEL_CON (0x13fb_f0b4) bit [1:0] = 0x1 */
     writel(0x00000001, g_MFG_base + 0xb4);
@@ -48,10 +49,15 @@ static void __mtk_check_MFG_bus_idle(void)
 
     /* polling register MFG_DEBUG_TOP (0x13fb_f178) bit 2 = 0x1 */
     /* => 1 for bus idle, 0 for bus non-idle */
-    do {
-      val = readl(g_MFG_base + 0x178);
-      mali_pr_debug("@%s: 0x13fb_f178 val = 0x%x\n", __func__, val);
-    } while ((val & 0x4) != 0x4);
+    for (retry = 0; retry < 1000; retry++) {
+        val = readl(g_MFG_base + 0x178);
+        mali_pr_debug("@%s: 0x13fb_f178 val = 0x%x\n", __func__, val);
+        if ((val & 0x4) == 0x4)
+            break;
+        udelay(1);
+    }
+    if ((val & 0x4) != 0x4)
+        pr_warn_ratelimited(MALI_TAG "MFG bus idle timeout: 0x%x\n", val);
 }
 
 static void __mtk_set_MFG_HW_CG(void)
