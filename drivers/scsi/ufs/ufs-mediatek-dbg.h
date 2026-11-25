@@ -114,6 +114,7 @@ struct cmd_hist_struct {
 };
 
 int ufsdbg_register(struct device *dev);
+bool cmd_hist_is_enabled(void);
 int cmd_hist_enable(void);
 int cmd_hist_disable(void);
 void ufs_mediatek_dbg_dump(void);

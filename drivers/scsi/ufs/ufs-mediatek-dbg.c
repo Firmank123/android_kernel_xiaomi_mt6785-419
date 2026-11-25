@@ -390,6 +390,12 @@ static void lookup_tracepoints(struct tracepoint *tp, void *ignore)
 	}
 }
 
+bool cmd_hist_is_enabled(void)
+{
+	return READ_ONCE(cmd_hist_enabled);
+}
+EXPORT_SYMBOL_GPL(cmd_hist_is_enabled);
+
 int cmd_hist_enable(void)
 {
 	unsigned long flags;
