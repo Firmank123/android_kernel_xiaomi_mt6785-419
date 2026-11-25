@@ -26,7 +26,7 @@
 static inline void INIT_LIST_HEAD(struct list_head *list)
 {
 	WRITE_ONCE(list->next, list);
-	list->prev = list;
+	WRITE_ONCE(list->prev, list);
 }
 
 #ifdef CONFIG_DEBUG_LIST
@@ -232,8 +232,8 @@ static inline int list_empty(const struct list_head *head)
  */
 static inline int list_empty_careful(const struct list_head *head)
 {
-	struct list_head *next = head->next;
-	return (next == head) && (next == head->prev);
+	struct list_head *next = READ_ONCE(head->next);
+	return (next == head) && (next == READ_ONCE(head->prev));
 }
 
 /**
