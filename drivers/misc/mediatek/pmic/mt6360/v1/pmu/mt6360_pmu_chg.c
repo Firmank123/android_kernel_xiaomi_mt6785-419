@@ -2595,6 +2595,8 @@ static void mt6360_pmu_chg_irq_enable(const char *name, int en)
 		if (unlikely(!irq_desc->name))
 			continue;
 		if (!strcmp(irq_desc->name, name)) {
+			if (irq_desc->irq <= 0)
+				break;
 			if (en)
 				enable_irq(irq_desc->irq);
 			else
@@ -2607,24 +2609,42 @@ static void mt6360_pmu_chg_irq_enable(const char *name, int en)
 static void mt6360_pmu_chg_irq_register(struct platform_device *pdev)
 {
 	struct mt6360_pmu_irq_desc *irq_desc;
-	int i, ret;
+	int i, ret, irq;
 
 	for (i = 0; i < ARRAY_SIZE(mt6360_pmu_chg_irq_desc); i++) {
 		irq_desc = mt6360_pmu_chg_irq_desc + i;
 		if (unlikely(!irq_desc->name))
 			continue;
-		ret = platform_get_irq_byname(pdev, irq_desc->name);
-		if (ret < 0)
+		irq = platform_get_irq_byname(pdev, irq_desc->name);
+		if (irq < 0)
 			continue;
-		irq_desc->irq = ret;
-		ret = devm_request_threaded_irq(&pdev->dev, irq_desc->irq, NULL,
+		ret = devm_request_threaded_irq(&pdev->dev, irq, NULL,
 						irq_desc->irq_handler,
 						IRQF_TRIGGER_FALLING,
 						irq_desc->name,
 						platform_get_drvdata(pdev));
-		if (ret < 0)
+		if (ret < 0) {
 			dev_err(&pdev->dev,
 				"request %s irq fail\n", irq_desc->name);
+			irq_desc->irq = 0;
+		} else {
+			irq_desc->irq = irq;
+		}
+	}
+}
+
+static void mt6360_pmu_chg_irq_unregister(struct platform_device *pdev)
+{
+	struct mt6360_pmu_irq_desc *irq_desc;
+	void *drvdata = platform_get_drvdata(pdev);
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(mt6360_pmu_chg_irq_desc); i++) {
+		irq_desc = mt6360_pmu_chg_irq_desc + i;
+		if (irq_desc->irq > 0) {
+			devm_free_irq(&pdev->dev, irq_desc->irq, drvdata);
+			irq_desc->irq = 0;
+		}
 	}
 }
 
@@ -2679,7 +2699,11 @@ static int mt6360_chg_mivr_task_threadfn(void *data)
 
 	dev_info(mpci->dev, "%s ++\n", __func__);
 	while (!kthread_should_stop()) {
-		wait_event(mpci->waitq, atomic_read(&mpci->mivr_cnt) > 0);
+		wait_event(mpci->waitq,
+			   atomic_read(&mpci->mivr_cnt) > 0 ||
+			   kthread_should_stop());
+		if (kthread_should_stop())
+			break;
 		mt_dbg(mpci->dev, "%s: enter mivr thread\n", __func__);
 		pm_stay_awake(mpci->dev);
 		/* check real mivr stat or not */
@@ -3158,9 +3182,6 @@ static int mt6360_pmu_chg_probe(struct platform_device *pdev)
 		goto err_mutex_init;
 	}
 
-	/* irq register */
-	mt6360_pmu_chg_irq_register(pdev);
-	device_init_wakeup(&pdev->dev, true);
 	/* mivr task */
 	name = devm_kasprintf(mpci->dev, GFP_KERNEL,
 			      "mivr_thread.%s", dev_name(mpci->dev));
@@ -3172,24 +3193,29 @@ static int mt6360_pmu_chg_probe(struct platform_device *pdev)
 				      name);
 	ret = PTR_ERR_OR_ZERO(mpci->mivr_task);
 	if (ret < 0) {
+		mpci->mivr_task = NULL;
 		dev_err(mpci->dev, "create mivr handling thread fail\n");
 		goto err_register_chg_dev;
 	}
 	ret = device_create_file(mpci->dev, &dev_attr_shipping_mode);
 	if (ret < 0) {
 		dev_notice(&pdev->dev, "create shipping attr fail\n");
-		goto err_register_chg_dev;
+		goto err_mivr_task;
 	}
 	/* for trigger unfinish pe pattern */
 	mpci->pe_wq = create_singlethread_workqueue("pe_pattern");
 	if (!mpci->pe_wq) {
 		dev_err(mpci->dev, "%s: create pe_pattern work queue fail\n",
 			__func__);
+		ret = -ENOMEM;
 		goto err_shipping_mode_attr;
 	}
 	INIT_WORK(&mpci->pe_work, mt6360_trigger_pep_work_handler);
 	INIT_DELAYED_WORK(&mpci->get_hvdcp_work, mt6360_get_hvdcp_work);
 
+	/* irq register */
+	device_init_wakeup(&pdev->dev, true);
+	mt6360_pmu_chg_irq_register(pdev);
 
 	/* register fg bat oc notify */
 	if (pdata->batoc_notify)
@@ -3204,9 +3230,15 @@ static int mt6360_pmu_chg_probe(struct platform_device *pdev)
 	return 0;
 err_shipping_mode_attr:
 	device_remove_file(mpci->dev, &dev_attr_shipping_mode);
+err_mivr_task:
+	if (mpci->mivr_task) {
+		kthread_stop(mpci->mivr_task);
+		mpci->mivr_task = NULL;
+	}
 err_register_chg_dev:
 	charger_device_unregister(mpci->chg_dev);
 err_mutex_init:
+	mutex_destroy(&mpci->ichg_lock);
 	mutex_destroy(&mpci->tchg_lock);
 	mutex_destroy(&mpci->chgdet_lock);
 	mutex_destroy(&mpci->aicr_lock);
@@ -3220,16 +3252,17 @@ static int mt6360_pmu_chg_remove(struct platform_device *pdev)
 	struct mt6360_pmu_chg_info *mpci = platform_get_drvdata(pdev);
 
 	dev_dbg(mpci->dev, "%s\n", __func__);
+	if (mpci->mivr_task) {
+		kthread_stop(mpci->mivr_task);
+		mpci->mivr_task = NULL;
+	}
+	mt6360_pmu_chg_irq_unregister(pdev);
 	cancel_delayed_work_sync(&mpci->get_hvdcp_work);
 	flush_workqueue(mpci->pe_wq);
 	destroy_workqueue(mpci->pe_wq);
-	if (mpci->mivr_task) {
-		kthread_stop(mpci->mivr_task);
-		atomic_inc(&mpci->mivr_cnt);
-		wake_up(&mpci->waitq);
-	}
 	device_remove_file(mpci->dev, &dev_attr_shipping_mode);
 	charger_device_unregister(mpci->chg_dev);
+	mutex_destroy(&mpci->ichg_lock);
 	mutex_destroy(&mpci->tchg_lock);
 	mutex_destroy(&mpci->chgdet_lock);
 	mutex_destroy(&mpci->aicr_lock);
