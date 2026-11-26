@@ -2568,6 +2568,22 @@ static void get_scan_count(struct lruvec *lruvec, struct mem_cgroup *memcg,
 	}
 
 	/*
+	 * Bound reclaim feedback before applying swappiness. At the supported
+	 * extremes swappiness can still reduce either final priority to zero.
+	 */
+	total_cost = sc->anon_cost + sc->file_cost;
+	anon_cost = total_cost + sc->anon_cost;
+	file_cost = total_cost + sc->file_cost;
+	total_cost = anon_cost + file_cost;
+	ap = weighted_cost_ratio(total_cost + 1, anon_cost + 1, swappiness);
+	fp = weighted_cost_ratio(total_cost + 1, file_cost + 1,
+				 200 - swappiness);
+
+	fraction[0] = ap;
+	fraction[1] = fp;
+	denominator = ap + fp + 1;
+
+	/*
 	 * If there is enough inactive page cache, i.e. if the size of the
 	 * inactive list is greater than that of the active list *and* the
 	 * inactive list actually has some pages to scan on this priority, we
@@ -2589,29 +2605,37 @@ static void get_scan_count(struct lruvec *lruvec, struct mem_cgroup *memcg,
 				       sc->reclaim_idx);
 		if (anon && !file)
 			sc->skipped_deactivate = 1;
-		if (anon && swappiness && current_is_kswapd())
-			sc->cache_trim_skipped_anon = 1;
+		if (anon && swappiness && current_is_kswapd() &&
+		    !sc->cache_trim_skipped_anon) {
+			enum lru_list anon_lru;
+			bool online = mem_cgroup_online(memcg);
+
+			for (anon_lru = LRU_INACTIVE_ANON;
+			     anon_lru <= LRU_ACTIVE_ANON; anon_lru++) {
+				unsigned long size;
+				unsigned long scan;
+
+				size = lruvec_lru_size(lruvec, anon_lru,
+						       sc->reclaim_idx);
+				scan = size >> sc->priority;
+				if (!scan && !online)
+					scan = min(size,
+						   (unsigned long)SWAP_CLUSTER_MAX);
+				scan = online ?
+				       div64_u64(scan * ap, denominator) :
+				       DIV64_U64_ROUND_UP(scan * ap,
+							  denominator);
+				if (scan > 0) {
+					sc->cache_trim_skipped_anon = 1;
+					break;
+				}
+			}
+		}
 		scan_balance = SCAN_FILE;
 		goto out;
 	}
 
 	scan_balance = SCAN_FRACT;
-
-	/*
-	 * Bound reclaim feedback before applying swappiness. At the supported
-	 * extremes swappiness can still reduce either final priority to zero.
-	 */
-	total_cost = sc->anon_cost + sc->file_cost;
-	anon_cost = total_cost + sc->anon_cost;
-	file_cost = total_cost + sc->file_cost;
-	total_cost = anon_cost + file_cost;
-	ap = weighted_cost_ratio(total_cost + 1, anon_cost + 1, swappiness);
-	fp = weighted_cost_ratio(total_cost + 1, file_cost + 1,
-				 200 - swappiness);
-
-	fraction[0] = ap;
-	fraction[1] = fp;
-	denominator = ap + fp + 1;
 out:
 	*lru_pages = 0;
 	for_each_evictable_lru(lru) {
