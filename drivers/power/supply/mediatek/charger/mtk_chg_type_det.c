@@ -1253,7 +1253,10 @@ static int chgdet_task_threadfn(void *data)
 	pr_info("%s: ++\n", __func__);
 	while (!kthread_should_stop()) {
 		ret = wait_event_interruptible(cti->waitq,
-					     atomic_read(&cti->chgdet_cnt) > 0);
+					     atomic_read(&cti->chgdet_cnt) > 0 ||
+					     kthread_should_stop());
+		if (kthread_should_stop())
+			break;
 		if (ret < 0) {
 			pr_info("%s: wait event been interrupted(%d)\n",
 				__func__, ret);
@@ -1304,6 +1307,7 @@ bypass_chgdet:
 pm_relax:
 		pm_relax(cti->dev);
 	}
+	power_supply_put(psy);
 	pr_info("%s: --\n", __func__);
 	return 0;
 }
@@ -1533,9 +1537,17 @@ static int mt_charger_probe(struct platform_device *pdev)
 
 	/* Init power off work */
 	cti->pwr_off_wq = create_singlethread_workqueue("tcpc_power_off");
+	if (!cti->pwr_off_wq) {
+		ret = -ENOMEM;
+		goto err_pwr_off_wq;
+	}
 	INIT_WORK(&cti->pwr_off_work, tcpc_power_off_work_handler);
 
 	cti->chg_in_wq = create_singlethread_workqueue("charger_in");
+	if (!cti->chg_in_wq) {
+		ret = -ENOMEM;
+		goto err_chg_in_wq;
+	}
 	INIT_WORK(&cti->chg_in_work, charger_in_work_handler);
 
 	INIT_DELAYED_WORK(&mt_chg->clear_soc_decimal_rate_work,
@@ -1583,7 +1595,7 @@ static int mt_charger_probe(struct platform_device *pdev)
 		dev_notice(&pdev->dev, "Failed to register power supply: %ld\n",
 			PTR_ERR(mt_chg->chg_psy));
 		ret = PTR_ERR(mt_chg->chg_psy);
-		return ret;
+		goto err_chg_psy;
 	}
 
 	mt_chg->ac_psy = power_supply_register(&pdev->dev, &mt_chg->ac_desc,
@@ -1657,11 +1669,8 @@ static int mt_charger_probe(struct platform_device *pdev)
 
 #ifdef CONFIG_TCPC_CLASS
 err_reg_notifier:
-	if (cti->chgdet_task) {
+	if (cti->chgdet_task)
 		kthread_stop(cti->chgdet_task);
-		atomic_inc(&cti->chgdet_cnt);
-		wake_up_interruptible(&cti->waitq);
-	}
 #endif
 err_chgdet_task:
 	power_supply_unregister(mt_chg->main_psy);
@@ -1671,8 +1680,15 @@ err_usb_psy:
 	power_supply_unregister(mt_chg->ac_psy);
 err_ac_psy:
 	power_supply_unregister(mt_chg->chg_psy);
+err_chg_psy:
+	cancel_delayed_work_sync(&mt_chg->clear_soc_decimal_rate_work);
+#ifdef CONFIG_EXTCON_USB_CHG
+	cancel_delayed_work_sync(&mt_chg->extcon_work);
+#endif
 	destroy_workqueue(cti->chg_in_wq);
+err_chg_in_wq:
 	destroy_workqueue(cti->pwr_off_wq);
+err_pwr_off_wq:
 	return ret;
 }
 
@@ -1681,6 +1697,7 @@ static int mt_charger_remove(struct platform_device *pdev)
 	struct mt_charger *mt_charger = platform_get_drvdata(pdev);
 	struct chg_type_info *cti = mt_charger->cti;
 
+	pr_info("%s\n", __func__);
 #ifdef CONFIG_TCPC_CLASS
 	if (cti && cti->tcpc) {
 		unregister_tcp_dev_notifier(cti->tcpc,
@@ -1689,22 +1706,27 @@ static int mt_charger_remove(struct platform_device *pdev)
 			&cti->pd_nb, TCP_NOTIFY_TYPE_ALL);
 	}
 #endif
+#ifdef CONFIG_MACH_MT6771
+	if (cti)
+		power_supply_unreg_notifier(&cti->psy_nb);
+#endif
+#ifdef CONFIG_EXTCON_USB_CHG
+	cancel_delayed_work_sync(&mt_charger->extcon_work);
+#endif
 
-	power_supply_unregister(mt_charger->chg_psy);
-	power_supply_unregister(mt_charger->ac_psy);
-	power_supply_unregister(mt_charger->usb_psy);
-	power_supply_unregister(mt_charger->main_psy);
+	if (cti && cti->chgdet_task)
+		kthread_stop(cti->chgdet_task);
 
 	cancel_delayed_work_sync(&mt_charger->clear_soc_decimal_rate_work);
-
-	pr_info("%s\n", __func__);
-	if (cti->chgdet_task) {
-		kthread_stop(cti->chgdet_task);
-		atomic_inc(&cti->chgdet_cnt);
-		wake_up_interruptible(&cti->waitq);
+	if (cti) {
+		destroy_workqueue(cti->chg_in_wq);
+		destroy_workqueue(cti->pwr_off_wq);
 	}
-	destroy_workqueue(cti->chg_in_wq);
-	destroy_workqueue(cti->pwr_off_wq);
+
+	power_supply_unregister(mt_charger->main_psy);
+	power_supply_unregister(mt_charger->usb_psy);
+	power_supply_unregister(mt_charger->ac_psy);
+	power_supply_unregister(mt_charger->chg_psy);
 
 	return 0;
 }
