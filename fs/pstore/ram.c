@@ -35,6 +35,7 @@
 #include <linux/pstore_ram.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
+#include <linux/sizes.h>
 
 #define RAMOOPS_KERNMSG_HDR "===="
 #define MIN_MEM_SIZE 4096UL
@@ -720,6 +721,25 @@ static int ramoops_parse_dt(struct platform_device *pdev,
 
 #undef parse_size
 
+	if (!pdata->record_size && !pdata->console_size &&
+	    !pdata->ftrace_size && !pdata->pmsg_size &&
+	    of_device_is_compatible(of_node, "mediatek,pstore") &&
+	    pdata->mem_size >= SZ_64K) {
+		if (pdata->mem_size >= 0xe0000) {
+			pdata->console_size = 0x40000;
+			pdata->pmsg_size = 0x40000;
+			pdata->record_size = 0x20000;
+		} else {
+			size_t chunk = rounddown_pow_of_two(pdata->mem_size / 4);
+
+			if (chunk < SZ_4K)
+				chunk = SZ_4K;
+			pdata->console_size = chunk;
+			pdata->pmsg_size = chunk;
+			pdata->record_size = chunk;
+		}
+	}
+
 	return 0;
 }
 
@@ -734,6 +754,21 @@ static int ramoops_probe(struct platform_device *pdev)
 	int err = -EINVAL;
 
 	if (dev_of_node(dev) && !pdata) {
+		if (of_device_is_compatible(dev->of_node, "ramoops") &&
+		    !of_device_is_compatible(dev->of_node, "mediatek,pstore")) {
+			struct device_node *mtk_np;
+
+			mtk_np = of_find_compatible_node(NULL, NULL,
+							 "mediatek,pstore");
+			if (mtk_np) {
+				bool avail = of_device_is_available(mtk_np);
+
+				of_node_put(mtk_np);
+				if (avail)
+					return -ENODEV;
+			}
+		}
+
 		pdata = &pdata_local;
 		memset(pdata, 0, sizeof(*pdata));
 
@@ -746,7 +781,7 @@ static int ramoops_probe(struct platform_device *pdev)
 	 * Only a single ramoops area allowed at a time, so fail extra
 	 * probes.
 	 */
-	if (cxt->max_dump_cnt) {
+	if (cxt->size) {
 		pr_err("already initialized\n");
 		goto fail_out;
 	}
@@ -905,6 +940,7 @@ static int ramoops_remove(struct platform_device *pdev)
 
 static const struct of_device_id dt_match[] = {
 	{ .compatible = "ramoops" },
+	{ .compatible = "mediatek,pstore" },
 	{}
 };
 
