@@ -3068,6 +3068,16 @@ static struct platform_driver goodix_ts_driver = {
 	.id_table = ts_core_ids,
 };
 
+bool goodix_is_supported_panel(void)
+{
+	if (IS_ERR_OR_NULL(mtkfb_lcm_name))
+		return false;
+
+	return (strcmp(mtkfb_lcm_name, "dsi_panel_k7_44_06_0b_fhdp_video") == 0) ||
+	       (strcmp(mtkfb_lcm_name, "dsi_panel_k7_44_0e_0b_fhdp_video") == 0);
+}
+EXPORT_SYMBOL_GPL(goodix_is_supported_panel);
+
 static int __init goodix_ts_core_init(void)
 {
 	int ret;
@@ -3075,18 +3085,15 @@ static int __init goodix_ts_core_init(void)
 	ts_info("Core layer init:%s", GOODIX_DRIVER_VERSION);
 
 	/*check TP vendor*/
-	if(IS_ERR_OR_NULL(mtkfb_lcm_name)){
+	if (IS_ERR_OR_NULL(mtkfb_lcm_name)) {
 		ts_err("mtkfb_lcm_name error!");
 		return -ENOMEM;
-	} else {
-		if((strcmp(mtkfb_lcm_name,"dsi_panel_k7_44_06_0b_fhdp_video") == 0) ||
-				(strcmp(mtkfb_lcm_name,"dsi_panel_k7_44_0e_0b_fhdp_video") == 0)){
-			ts_info("TP info:[Vendor]Visionox,[Ic]GT9885");
-		}else{
-			ts_err("Tp info:[Vendor]unknow,[Ic]unknow");
-			return -ENODEV;
-		}
 	}
+	if (!goodix_is_supported_panel()) {
+		ts_err("Tp info:[Vendor]unknow,[Ic]unknow");
+		return -ENODEV;
+	}
+	ts_info("TP info:[Vendor]Visionox,[Ic]GT9885");
 
 
 	ret = goodix_bus_init();

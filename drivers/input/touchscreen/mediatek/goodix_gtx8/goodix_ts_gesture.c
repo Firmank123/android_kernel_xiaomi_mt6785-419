@@ -446,10 +446,16 @@ static int __init goodix_gsx_gesture_init(void)
 {
 	/* initialize core_data->ts_dev->gesture_cmd */
 	int result;
+
+	if (!goodix_is_supported_panel()) {
+		ts_info("skip gesture init for unsupported panel");
+		return -ENODEV;
+	}
+
 	ts_info("gesture module init");
 	gsx_gesture = kzalloc(sizeof(struct gesture_module), GFP_KERNEL);
 	if (!gsx_gesture)
-		result = -ENOMEM;
+		return -ENOMEM;
 	gsx_gesture->module.funcs = &gsx_gesture_funcs;
 	gsx_gesture->module.priority = EXTMOD_PRIO_GESTURE;
 	gsx_gesture->module.name = "Goodix_gsx_gesture";
@@ -468,6 +474,8 @@ static void __exit goodix_gsx_gesture_exit(void)
 {
 	int i, ret;
 	ts_info("gesture module exit");
+	if (!gsx_gesture)
+		return;
 	if (atomic_read(&gsx_gesture->registered)) {
 		ret = goodix_unregister_ext_module(&gsx_gesture->module);
 		atomic_set(&gsx_gesture->registered, 0);

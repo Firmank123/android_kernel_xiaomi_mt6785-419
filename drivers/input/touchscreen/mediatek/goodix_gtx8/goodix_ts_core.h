@@ -781,6 +781,8 @@ int goodix_unregister_all_module(void);
  */
 int goodix_ts_irq_enable(struct goodix_ts_core *core_data, bool enable);
 
+bool goodix_is_supported_panel(void);
+
 struct kobj_type *goodix_get_default_ktype(void);
 
 /**
