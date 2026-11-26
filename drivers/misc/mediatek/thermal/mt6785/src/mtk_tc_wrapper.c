@@ -966,15 +966,24 @@ static struct notifier_block thermal_idle_nfb = {
 };
 
 #ifdef CONFIG_OF
+void __iomem *rgu_base;
+
 int get_io_reg_base(void)
 {
 	struct device_node *node = NULL;
+	struct device_node *rgu_node = NULL;
 
 	node = of_find_compatible_node(NULL, NULL, "mediatek,therm_ctrl");
 	WARN_ON_ONCE(node == 0);
 	if (node) {
 		/* Setup IO addresses */
 		thermal_base = of_iomap(node, 0);
+	}
+
+	rgu_node = of_find_compatible_node(NULL, NULL, "mediatek,toprgu");
+	if (rgu_node) {
+		rgu_base = of_iomap(rgu_node, 0);
+		of_node_put(rgu_node);
 	}
 
 	/*get thermal irq num */

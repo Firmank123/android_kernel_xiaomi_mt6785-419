@@ -326,6 +326,7 @@ extern void __iomem *auxadc_ts_base;
 extern void __iomem *infracfg_ao_base;
 extern void __iomem *th_apmixed_base;
 extern void __iomem *INFRACFG_AO_base;
+extern void __iomem *rgu_base;
 
 extern int thermal_phy_base;
 extern int auxadc_ts_phy_base;
@@ -612,6 +613,14 @@ extern void lvts_dump_time_profiling_result(struct seq_file *m);
 #define AUXADC_BASE_2        auxadc_ts_base
 #define INFRACFG_AO_BASE_2   infracfg_ao_base
 #define APMIXED_BASE_2       th_apmixed_base
+#define RGU_CTRL_BASE_2      rgu_base
+
+#define MTK_WDT_REQ_MODE		(RGU_CTRL_BASE_2 + 0x0030)
+#define MTK_WDT_REQ_IRQ_EN		(RGU_CTRL_BASE_2 + 0x0034)
+#define MTK_WDT_REQ_MODE_KEY		(0x33000000)
+#define MTK_WDT_REQ_IRQ_KEY		(0x44000000)
+#define MTK_WDT_REQ_MODE_THERMAL	(1 << 18)
+#define MTK_WDT_REQ_IRQ_THERMAL_EN	(1 << 18)
 #else
 #include <mach/mt_reg_base.h>
 #define AUXADC_BASE_2     AUXADC_BASE

@@ -1585,11 +1585,39 @@ void lvts_tscpu_thermal_initial_all_tc(void)
 #endif
 }
 
+static void lvts_config_rgu_reset(bool enable)
+{
+	unsigned int tmp;
+
+	tmp = readl(MTK_WDT_REQ_MODE);
+	tmp |= MTK_WDT_REQ_MODE_KEY;
+	if (enable)
+		tmp |= MTK_WDT_REQ_MODE_THERMAL;
+	else
+		tmp &= ~MTK_WDT_REQ_MODE_THERMAL;
+	mt_reg_sync_writel_print(tmp, MTK_WDT_REQ_MODE);
+
+	tmp = readl(MTK_WDT_REQ_IRQ_EN);
+	tmp |= MTK_WDT_REQ_IRQ_KEY;
+	tmp &= ~MTK_WDT_REQ_IRQ_THERMAL_EN;
+	mt_reg_sync_writel_print(tmp, MTK_WDT_REQ_IRQ_EN);
+}
+
+static void lvts_disable_rgu_reset(void)
+{
+	lvts_config_rgu_reset(false);
+}
+
+static void lvts_enable_rgu_reset(void)
+{
+	lvts_config_rgu_reset(true);
+}
+
 void lvts_config_all_tc_hw_protect(int temperature, int temperature2)
 {
 	unsigned int i = 0;
-	int wd_api_ret;
-	struct wd_api *wd_api;
+	int wd_api_ret = -1;
+	struct wd_api *wd_api = NULL;
 
 	lvts_printk("%s, temperature=%d,temperature2=%d,\n",
 					__func__, temperature, temperature2);
@@ -1598,18 +1626,18 @@ void lvts_config_all_tc_hw_protect(int temperature, int temperature2)
 	/*Thermal need to config to direct reset mode
 	 *this API provide by Weiqi Fu(RGU SW owner).
 	 */
-
-	wd_api_ret = get_wd_api(&wd_api);
-	if (wd_api_ret >= 0) {
-		/* reset mode */
-		wd_api->wd_thermal_direct_mode_config(
-				WD_REQ_DIS, WD_REQ_RST_MODE);
-
+	if (rgu_base) {
+		lvts_disable_rgu_reset();
 	} else {
-		lvts_warn("%d FAILED TO GET WD API\n", __LINE__);
-		WARN_ON_ONCE(1);
+		wd_api_ret = get_wd_api(&wd_api);
+		if (wd_api_ret >= 0) {
+			/* reset mode */
+			wd_api->wd_thermal_direct_mode_config(
+					WD_REQ_DIS, WD_REQ_RST_MODE);
+		} else {
+			lvts_warn("%d FAILED TO GET WD API\n", __LINE__);
+		}
 	}
-
 
 	for (i = 0; i < ARRAY_SIZE(lvts_tscpu_g_tc); i++) {
 		if (lvts_tscpu_g_tc[i].ts_number == 0)
@@ -1621,13 +1649,14 @@ void lvts_config_all_tc_hw_protect(int temperature, int temperature2)
 	/* Thermal need to config to direct reset mode
 	 * this API provide by Weiqi Fu(RGU SW owner).
 	 */
-	if (wd_api_ret >= 0) {
+	if (rgu_base) {
+		lvts_enable_rgu_reset();
+	} else if (wd_api_ret >= 0) {
 		/* reset mode */
 		wd_api->wd_thermal_direct_mode_config(
 				WD_REQ_EN, WD_REQ_RST_MODE);
 	} else {
 		lvts_warn("%d FAILED TO GET WD API\n", __LINE__);
-		WARN_ON_ONCE(1);
 	}
 }
 
