@@ -1653,6 +1653,7 @@ static inline int typec_attached_snk_cc_detach(struct tcpc_device *tcpc)
 		tcpc_enable_timer(tcpc, TYPEC_TIMER_PDDEBOUNCE);
 	}
 #endif	/* CONFIG_USB_POWER_DELIVERY */
+	tcpci_check_vbus_valid_from_ic(tcpc);
 	return 0;
 }
 #endif	/* TYPEC_EXIT_ATTACHED_SNK_VIA_VBUS */

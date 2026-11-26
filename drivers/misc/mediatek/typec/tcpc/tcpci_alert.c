@@ -175,8 +175,12 @@ static int tcpci_alert_power_status_changed(struct tcpc_device *tcpc)
 		return tcpci_alert_power_status_changed_v10(tcpc);
 
 	rv = tcpci_get_power_status(tcpc, &status);
-	if (rv < 0)
-		return rv;
+	if (rv < 0) {
+		usleep_range(1000, 2000);
+		rv = tcpci_get_power_status(tcpc, &status);
+		if (rv < 0)
+			return rv;
+	}
 
 	tcpc->vbus_present = (status & TCPC_REG_POWER_STATUS_VBUS_PRES) ?
 				 true : false;

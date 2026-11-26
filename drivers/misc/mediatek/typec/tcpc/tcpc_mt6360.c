@@ -401,8 +401,10 @@ static int mt6360_reg_write(struct i2c_client *i2c, u8 reg, const u8 data)
 #else
 	ret = mt6360_write_device(chip->client, reg, 1, &data);
 #endif /* CONFIG_RT_REGMAP */
-	if (ret < 0)
+	if (ret < 0) {
 		dev_err(chip->dev, "%s fail(%d)\n", __func__, ret);
+		return ret;
+	}
 	return 0;
 }
 
@@ -416,8 +418,10 @@ static int mt6360_block_read(struct i2c_client *i2c, u8 reg, int len, void *dst)
 #else
 	ret = mt6360_read_device(chip->client, reg, len, dst);
 #endif /* CONFIG_RT_REGMAP */
-	if (ret < 0)
+	if (ret < 0) {
 		dev_err(chip->dev, "%s fail(%d)\n", __func__, ret);
+		return ret;
+	}
 	return 0;
 }
 
@@ -432,8 +436,10 @@ static int mt6360_block_write(struct i2c_client *i2c, u8 reg, int len,
 #else
 	ret = mt6360_write_device(chip->client, reg, len, src);
 #endif /* CONFIG_RT_REGMAP */
-	if (ret < 0)
+	if (ret < 0) {
 		dev_err(chip->dev, "%s fail(%d)\n", __func__, ret);
+		return ret;
+	}
 	return 0;
 }
 
