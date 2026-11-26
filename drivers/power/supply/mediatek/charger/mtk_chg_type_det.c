@@ -1186,11 +1186,17 @@ static int pd_tcp_notifier_call(struct notifier_block *pnb,
 		if (noti->en_state.en == false && cti->typec_mode == POWER_SUPPLY_TYPEC_SINK_AUDIO_ADAPTER)
 			plug_in_out_handler(cti, false, false);
 		break;
-	case PD_CONNECT_HARD_RESET:
-		pd_active.intval = POWER_SUPPLY_PD_INACTIVE;
-		power_supply_set_property(usb_psy,
-			POWER_SUPPLY_PROP_PD_ACTIVE, &pd_active);
-		chr_err("PD HARD_RESET:%d %s\n", __LINE__, __func__);
+	case TCP_NOTIFY_PD_STATE:
+		switch (noti->pd_state.connected) {
+		case PD_CONNECT_HARD_RESET:
+			pd_active.intval = POWER_SUPPLY_PD_INACTIVE;
+			power_supply_set_property(usb_psy,
+				POWER_SUPPLY_PROP_PD_ACTIVE, &pd_active);
+			chr_err("PD HARD_RESET:%d %s\n", __LINE__, __func__);
+			break;
+		default:
+			break;
+		}
 		break;
 	}
 out:
