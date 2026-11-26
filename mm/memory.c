@@ -71,6 +71,7 @@
 #include <linux/dax.h>
 #include <linux/oom.h>
 #include <linux/wait.h>
+#include <linux/psi.h>
 
 #include <trace/events/kmem.h>
 
@@ -2951,16 +2952,19 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 			 */
 			if (swapcache_prepare(entry)) {
 				DEFINE_WAIT(wait);
+				unsigned long pflags;
 
 				/*
 				 * Relax a bit to prevent rapid repeated page
 				 * faults, waking early when the pin holder
 				 * clears swapcache.
 				 */
+				psi_memstall_enter(&pflags);
 				prepare_to_wait(&swapcache_waitqueue, &wait,
 						TASK_UNINTERRUPTIBLE);
 				schedule_timeout(1);
 				finish_wait(&swapcache_waitqueue, &wait);
+				psi_memstall_leave(&pflags);
 				delayacct_clear_flag(DELAYACCT_PF_SWAPIN);
 				goto out;
 			}
