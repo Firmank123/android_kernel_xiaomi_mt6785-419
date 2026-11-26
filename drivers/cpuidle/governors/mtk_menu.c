@@ -11,8 +11,6 @@
 #include <linux/hrtimer.h>
 #include <linux/tick.h>
 #include <linux/sched.h>
-#include <linux/sched/loadavg.h>
-#include <linux/sched/stat.h>
 #include <linux/math64.h>
 #include <linux/cpu.h>
 
@@ -87,7 +85,7 @@ static bool is_screen_on(void)
  *
  * The default values do not overflow.
  */
-#define BUCKETS 12
+#define BUCKETS 6
 #define INTERVAL_SHIFT 3
 #define INTERVALS (1UL << INTERVAL_SHIFT)
 #define RESOLUTION 1024
@@ -96,7 +94,6 @@ static bool is_screen_on(void)
 
 #define USE_CORRELATION_FACTOR
 #define USE_TYPICAL_INTERVAL
-#define USE_INTERACTIVITY_REQ
 
 /*
  * Concepts and ideas behind the menu governor
@@ -191,67 +188,19 @@ struct menu_device {
 	int		interval_ptr;
 };
 
-
-#define LOAD_INT(x) ((x) >> FSHIFT)
-#define LOAD_FRAC(x) LOAD_INT(((x) & (FIXED_1-1)) * 100)
-
-static inline int get_loadavg(unsigned long load)
+static inline int which_bucket(unsigned int duration)
 {
-	return LOAD_INT(load) * 10 + LOAD_FRAC(load) / 10;
-}
-
-static inline int which_bucket(unsigned int duration,
-			unsigned long nr_iowaiters)
-{
-	int bucket = 0;
-
-	/*
-	 * We keep two groups of stats; one with no
-	 * IO pending, one without.
-	 * This allows us to calculate
-	 * E(duration)|iowait
-	 */
-	if (nr_iowaiters)
-		bucket = BUCKETS / 2;
-
 	if (duration < 10)
-		return bucket;
+		return 0;
 	if (duration < 100)
-		return bucket + 1;
+		return 1;
 	if (duration < 1000)
-		return bucket + 2;
+		return 2;
 	if (duration < 10000)
-		return bucket + 3;
+		return 3;
 	if (duration < 100000)
-		return bucket + 4;
-	return bucket + 5;
-}
-
-/*
- * Return a multiplier for the exit latency that is intended
- * to take performance requirements into account.
- * The more performance critical we estimate the system
- * to be, the higher this multiplier, and thus the higher
- * the barrier to go to an expensive C state.
- */
-static inline int performance_multiplier(unsigned long nr_iowaiters,
-				unsigned long load)
-{
-	int mult = 1;
-
-	/* for higher loadavg, we are more reluctant */
-
-	/*
-	 * this doesn't work as intended - it is almost always 0, but can
-	 * sometimes, depending on workload, spike very high into the hundreds
-	 * even when the average cpu load is under 10%.
-	 */
-	/* mult += 2 * get_loadavg(); */
-
-	/* for IO wait tasks (per cpu!) we add 5x each */
-	mult += 10 * nr_iowaiters;
-
-	return mult;
+		return 4;
+	return 5;
 }
 
 static DEFINE_PER_CPU(struct menu_device, menu_devices);
@@ -362,11 +311,7 @@ static int menu_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 	int i;
 	int first_idx;
 	int idx;
-#ifdef USE_INTERACTIVITY_REQ
-	unsigned int interactivity_req;
-#endif
 	unsigned int expected_interval;
-	unsigned long nr_iowaiters, cpu_load;
 	ktime_t delta_next;
 
 	if (data->needs_update) {
@@ -377,8 +322,7 @@ static int menu_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 	/* determine the expected residency time, round up */
 	data->next_timer_us =
 		ktime_to_us(tick_nohz_get_sleep_length(&delta_next));
-	get_iowait_load(&nr_iowaiters, &cpu_load);
-	data->bucket = which_bucket(data->next_timer_us, nr_iowaiters);
+	data->bucket = which_bucket(data->next_timer_us);
 
 #ifdef USE_CORRELATION_FACTOR
 	/*
@@ -477,18 +421,8 @@ static int menu_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 		if (data->predicted_us < TICK_USEC)
 			data->predicted_us = min_t(unsigned int, TICK_USEC,
 						   ktime_to_us(delta_next));
-	} else {
-		/*
-		 * Use the performance multiplier and the user-configurable
-		 * latency_req to determine the maximum exit latency.
-		 */
-		interactivity_req = data->predicted_us /
-				performance_multiplier(nr_iowaiters, cpu_load);
-
-#ifdef USE_INTERACTIVITY_REQ
-		if (latency_req > interactivity_req)
-			latency_req = interactivity_req;
-#endif
+	} else if (latency_req > data->predicted_us) {
+		latency_req = data->predicted_us;
 	}
 
 	expected_interval = data->predicted_us;
