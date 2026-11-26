@@ -427,6 +427,9 @@ static inline bool pud_table(pud_t pud) { return true; }
 				 PUD_TYPE_TABLE)
 #endif
 
+#define pud_leaf(pud)		pud_sect(pud)
+#define pmd_leaf(pmd)		pmd_sect(pmd)
+
 static inline void set_pmd(pmd_t *pmdp, pmd_t pmd)
 {
 	WRITE_ONCE(*pmdp, pmd);
