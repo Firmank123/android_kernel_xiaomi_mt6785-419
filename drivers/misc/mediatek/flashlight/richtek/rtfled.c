@@ -393,6 +393,8 @@ static int rtfled_probe(struct platform_device *pdev)
 	    flashlight_device_register
 	    (fled_dev->name ? fled_dev->name : RT_FLED_DEVICE, &pdev->dev,
 	       fled_dev, &rtfled_impl_ops, fled_dev->init_props);
+	if (IS_ERR(fled_dev->flashlight_dev))
+		return PTR_ERR(fled_dev->flashlight_dev);
 	if (fled_dev->hal->rt_hal_fled_init) {
 		rc = fled_dev->hal->rt_hal_fled_init(fled_dev);
 		if (rc < 0) {
