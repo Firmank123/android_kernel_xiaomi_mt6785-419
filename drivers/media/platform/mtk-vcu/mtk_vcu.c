@@ -2626,9 +2626,13 @@ static int mtk_vcu_probe(struct platform_device *pdev)
 			cmdq_mbox_create(dev, i + vcu->gce_th_num[VCU_VDEC]);
 
 #if defined(CONFIG_MTK_SEC_VIDEO_PATH_SUPPORT)
-	vcu->clt_venc_sec[0] =
-		cmdq_mbox_create(dev,
-		vcu->gce_th_num[VCU_VDEC] + vcu->gce_th_num[VCU_VENC]);
+#if !(IS_ENABLED(CONFIG_MACH_MT6768) || IS_ENABLED(CONFIG_MACH_MT6779) || \
+	IS_ENABLED(CONFIG_MACH_MT6785) || IS_ENABLED(CONFIG_MACH_MT8168))
+	if (of_count_phandle_with_args(dev->of_node, "mboxes", "#mbox-cells") >
+	    vcu->gce_th_num[VCU_VDEC] + vcu->gce_th_num[VCU_VENC])
+		vcu->clt_venc_sec[0] = cmdq_mbox_create(dev,
+			vcu->gce_th_num[VCU_VDEC] + vcu->gce_th_num[VCU_VENC]);
+#endif
 #endif
 
 	if (IS_ERR_OR_NULL(vcu->clt_vdec[0]))
