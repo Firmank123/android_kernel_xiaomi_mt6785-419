@@ -419,8 +419,7 @@ static int menu_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 		 * anyway.
 		 */
 		if (data->predicted_us < TICK_USEC)
-			data->predicted_us = min_t(unsigned int, TICK_USEC,
-						   ktime_to_us(delta_next));
+			data->predicted_us = ktime_to_us(delta_next);
 	} else if (latency_req > data->predicted_us) {
 		latency_req = data->predicted_us;
 	}
