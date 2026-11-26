@@ -43,6 +43,8 @@
 #define MT6360_DRV_VERSION	"2.0.7_MTK"
 
 #define MT6360_IRQ_WAKE_TIME	(500) /* ms */
+#define MT6360_ALERT_RETRY_MAX	5
+#define MT6360_ALERT_RETRY_MS	20
 
 #define MEDIATEK_6360_VID	0x29cf
 #define MEDIATEK_6360_PID	0x6360
@@ -68,6 +70,12 @@ struct mt6360_chip {
 
 	atomic_t poll_count;
 	struct delayed_work poll_work;
+	struct delayed_work alert_retry_work;
+	spinlock_t alert_retry_lock;
+	int alert_retry_cnt;
+	bool alert_retry_pending;
+	bool pm_suspended;
+	bool irq_stopped;
 
 	int irq_gpio;
 	int irq;
@@ -737,9 +745,34 @@ static inline void mt6360_poll_ctrl(struct mt6360_chip *chip)
 	schedule_delayed_work(&chip->poll_work, msecs_to_jiffies(40));
 }
 
+static void mt6360_alert_retry_work(struct work_struct *work)
+{
+	struct mt6360_chip *chip = container_of(work, struct mt6360_chip,
+						alert_retry_work.work);
+	unsigned long flags;
+	bool stopped;
+
+	spin_lock_irqsave(&chip->alert_retry_lock, flags);
+	stopped = chip->irq_stopped || chip->pm_suspended;
+	spin_unlock_irqrestore(&chip->alert_retry_lock, flags);
+	if (stopped)
+		return;
+
+	if (gpio_get_value(chip->irq_gpio) == 0) {
+		__pm_wakeup_event(chip->irq_wake_lock, MT6360_IRQ_WAKE_TIME);
+		kthread_queue_work(&chip->irq_worker, &chip->irq_work);
+	} else {
+		spin_lock_irqsave(&chip->alert_retry_lock, flags);
+		chip->alert_retry_cnt = 0;
+		chip->alert_retry_pending = false;
+		spin_unlock_irqrestore(&chip->alert_retry_lock, flags);
+	}
+}
+
 static void mt6360_irq_work_handler(struct kthread_work *work)
 {
 	int regval, gpio_val;
+	unsigned long flags;
 	struct mt6360_chip *chip = container_of(work, struct mt6360_chip,
 						irq_work);
 
@@ -755,9 +788,42 @@ static void mt6360_irq_work_handler(struct kthread_work *work)
 		if (regval)
 			break;
 		gpio_val = gpio_get_value(chip->irq_gpio);
-	} while (gpio_val == 0);
+	} while (gpio_val == 0 && !READ_ONCE(chip->irq_stopped));
 
 	tcpci_unlock_typec(chip->tcpc);
+
+	if (!regval) {
+		spin_lock_irqsave(&chip->alert_retry_lock, flags);
+		chip->alert_retry_cnt = 0;
+		chip->alert_retry_pending = false;
+		cancel_delayed_work(&chip->alert_retry_work);
+		spin_unlock_irqrestore(&chip->alert_retry_lock, flags);
+	} else {
+		gpio_val = gpio_get_value(chip->irq_gpio);
+		if (gpio_val == 0) {
+			spin_lock_irqsave(&chip->alert_retry_lock, flags);
+			if (!chip->irq_stopped) {
+				if (chip->pm_suspended) {
+					chip->alert_retry_pending = true;
+				} else if (chip->alert_retry_cnt <
+					   MT6360_ALERT_RETRY_MAX) {
+					chip->alert_retry_cnt++;
+					chip->alert_retry_pending = true;
+					__pm_wakeup_event(chip->irq_wake_lock,
+							  MT6360_ALERT_RETRY_MS + 50);
+					mod_delayed_work(system_wq,
+						&chip->alert_retry_work,
+						msecs_to_jiffies(MT6360_ALERT_RETRY_MS));
+				} else {
+					chip->alert_retry_pending = false;
+					dev_err(chip->dev,
+						"%s alert retry exhausted (%d)\n",
+						__func__, regval);
+				}
+			}
+			spin_unlock_irqrestore(&chip->alert_retry_lock, flags);
+		}
+	}
 
 #ifdef DEBUG_GPIO
 	gpio_set_value(DEBUG_GPIO, 1);
@@ -776,8 +842,13 @@ static void mt6360_poll_work(struct work_struct *work)
 static irqreturn_t mt6360_intr_handler(int irq, void *data)
 {
 	struct mt6360_chip *chip = data;
+	unsigned long flags;
 
 	__pm_wakeup_event(chip->irq_wake_lock, MT6360_IRQ_WAKE_TIME);
+
+	spin_lock_irqsave(&chip->alert_retry_lock, flags);
+	chip->alert_retry_cnt = 0;
+	spin_unlock_irqrestore(&chip->alert_retry_lock, flags);
 
 #ifdef DEBUG_GPIO
 	gpio_set_value(DEBUG_GPIO, 0);
@@ -1045,6 +1116,8 @@ static int mt6360_init_alert(struct tcpc_device *tcpc)
 	if (ret < 0) {
 		dev_err(chip->dev, "%s fail to request irq%d, gpio%d (%d)\n",
 			__func__, chip->irq, chip->irq_gpio, ret);
+		kthread_stop(chip->irq_worker_task);
+		chip->irq_worker_task = NULL;
 		goto init_alert_err;
 	}
 	enable_irq_wake(chip->irq);
@@ -1057,8 +1130,12 @@ init_alert_err:
 static inline int mt6360_vend_alert_status_clear(struct tcpc_device *tcpc,
 						 const u8 *mask)
 {
-	mt6360_i2c_block_write(tcpc, MT6360_REG_MT_INT1,
-			       MT6360_VEND_INT_MAX, mask);
+	int ret;
+
+	ret = mt6360_i2c_block_write(tcpc, MT6360_REG_MT_INT1,
+				     MT6360_VEND_INT_MAX, mask);
+	if (ret < 0)
+		return ret;
 	return mt6360_i2c_write16(tcpc, TCPC_V10_REG_ALERT,
 				  TCPC_V10_REG_ALERT_VENDOR_DEFINED);
 }
@@ -2581,8 +2658,10 @@ static int mt6360_i2c_probe(struct i2c_client *client,
 	chip->client = client;
 	sema_init(&chip->io_lock, 1);
 	sema_init(&chip->suspend_lock, 1);
+	spin_lock_init(&chip->alert_retry_lock);
 	i2c_set_clientdata(client, chip);
 	INIT_DELAYED_WORK(&chip->poll_work, mt6360_poll_work);
+	INIT_DELAYED_WORK(&chip->alert_retry_work, mt6360_alert_retry_work);
 	chip->irq_wake_lock =
 		wakeup_source_register(chip->dev, "mt6360_irq_wake_lock");
 	chip->i2c_wake_lock =
@@ -2656,8 +2735,23 @@ err_tcpc_reg:
 static int mt6360_i2c_remove(struct i2c_client *client)
 {
 	struct mt6360_chip *chip = i2c_get_clientdata(client);
+	unsigned long flags;
 
 	if (chip) {
+		spin_lock_irqsave(&chip->alert_retry_lock, flags);
+		chip->irq_stopped = true;
+		chip->alert_retry_pending = false;
+		spin_unlock_irqrestore(&chip->alert_retry_lock, flags);
+		if (chip->irq > 0) {
+			disable_irq_wake(chip->irq);
+			free_irq(chip->irq, chip);
+		}
+		cancel_delayed_work_sync(&chip->alert_retry_work);
+		if (!IS_ERR_OR_NULL(chip->irq_worker_task)) {
+			kthread_flush_worker(&chip->irq_worker);
+			kthread_stop(chip->irq_worker_task);
+			chip->irq_worker_task = NULL;
+		}
 		cancel_delayed_work_sync(&chip->poll_work);
 #ifdef CONFIG_WD_SBU_POLLING
 		cancel_work_sync(&chip->wd_work);
@@ -2679,11 +2773,17 @@ static int mt6360_i2c_suspend(struct device *dev)
 {
 	struct mt6360_chip *chip;
 	struct i2c_client *client = to_i2c_client(dev);
+	unsigned long flags;
 
 	if (client) {
 		chip = i2c_get_clientdata(client);
-		if (chip)
+		if (chip) {
+			spin_lock_irqsave(&chip->alert_retry_lock, flags);
+			chip->pm_suspended = true;
+			spin_unlock_irqrestore(&chip->alert_retry_lock, flags);
+			cancel_delayed_work_sync(&chip->alert_retry_work);
 			down(&chip->suspend_lock);
+		}
 	}
 
 	return 0;
@@ -2693,11 +2793,28 @@ static int mt6360_i2c_resume(struct device *dev)
 {
 	struct mt6360_chip *chip;
 	struct i2c_client *client = to_i2c_client(dev);
+	unsigned long flags;
+	bool retry = false;
 
 	if (client) {
 		chip = i2c_get_clientdata(client);
-		if (chip)
+		if (chip) {
 			up(&chip->suspend_lock);
+			spin_lock_irqsave(&chip->alert_retry_lock, flags);
+			chip->pm_suspended = false;
+			if (!chip->irq_stopped && chip->alert_retry_pending) {
+				chip->alert_retry_cnt = 0;
+				chip->alert_retry_pending = false;
+				retry = true;
+			}
+			spin_unlock_irqrestore(&chip->alert_retry_lock, flags);
+			if (retry && gpio_get_value(chip->irq_gpio) == 0) {
+				__pm_wakeup_event(chip->irq_wake_lock,
+						  MT6360_IRQ_WAKE_TIME);
+				kthread_queue_work(&chip->irq_worker,
+						   &chip->irq_work);
+			}
+		}
 	}
 
 	return 0;
@@ -2706,11 +2823,19 @@ static int mt6360_i2c_resume(struct device *dev)
 static void mt6360_shutdown(struct i2c_client *client)
 {
 	struct mt6360_chip *chip = i2c_get_clientdata(client);
+	unsigned long flags;
 
 	/* Please reset IC here */
 	if (chip) {
-		if (chip->irq)
+		spin_lock_irqsave(&chip->alert_retry_lock, flags);
+		chip->irq_stopped = true;
+		chip->alert_retry_pending = false;
+		spin_unlock_irqrestore(&chip->alert_retry_lock, flags);
+		if (chip->irq > 0)
 			disable_irq(chip->irq);
+		cancel_delayed_work_sync(&chip->alert_retry_work);
+		if (!IS_ERR_OR_NULL(chip->irq_worker_task))
+			kthread_flush_worker(&chip->irq_worker);
 		tcpm_shutdown(chip->tcpc);
 	} else
 		i2c_smbus_write_byte_data(client, MT6360_REG_SWRESET, 0x01);
