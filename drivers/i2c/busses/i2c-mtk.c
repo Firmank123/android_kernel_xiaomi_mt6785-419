@@ -2135,15 +2135,19 @@ static int mt_i2c_resume_noirq(struct device *dev)
 	struct platform_device *pdev = to_platform_device(dev);
 	struct mt_i2c *i2c = platform_get_drvdata(pdev);
 	struct arm_smccc_res res;
+	int ret = 0;
 
 	spin_lock(&i2c->cg_lock);
 	i2c->suspended = false;
 	spin_unlock(&i2c->cg_lock);
 
 	if (i2c->ch_offset_default) {
-		if (mt_i2c_clock_enable(i2c))
-			dev_info(i2c->dev, "%s enable clock failed\n",
-				 __func__);
+		ret = mt_i2c_clock_enable(i2c);
+		if (ret) {
+			dev_info(i2c->dev, "%s enable clock failed(%d)\n",
+				 __func__, ret);
+			return ret;
+		}
 		/* Enable multi-channel DMA mode at ATF */
 		arm_smccc_smc(MTK_SIP_I2C_CONTROL, i2c->id,
 				V2_OFFSET_MULTI_DMA, I2C_SHADOW_REG_MODE, 0, 0, 0, 0, &res);
