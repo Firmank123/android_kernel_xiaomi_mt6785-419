@@ -1347,11 +1347,6 @@ static int mtkts_btspdchg_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	thermistor_ch5 = devm_kzalloc(&pdev->dev, sizeof(*thermistor_ch5),
-		GFP_KERNEL);
-	if (!thermistor_ch5)
-		return -ENOMEM;
-
 	thermistor_ch5 = iio_channel_get(&pdev->dev, "thermistor-ch4");
 	ret = IS_ERR(thermistor_ch5);
 	if (ret) {
@@ -1416,12 +1411,12 @@ static int __init mtkts_btspdchg_init(void)
 		mtkts_btspdchg_dprintk(
 			"[%s]: mkdir /proc/driver/thermal failed\n", __func__);
 	} else {
-		entry = proc_create("tzbtspa", 0664, mtkts_btspdchg_dir,
+		entry = proc_create("tzbtspdchg", 0664, mtkts_btspdchg_dir,
 				&mtkts_btspdchg_fops);
 		if (entry)
 			proc_set_user(entry, uid, gid);
 
-		entry = proc_create("tzbtspa_param", 0664, mtkts_btspdchg_dir,
+		entry = proc_create("tzbtspdchg_param", 0664, mtkts_btspdchg_dir,
 				&mtkts_btspdchg_param_fops);
 		if (entry)
 			proc_set_user(entry, uid, gid);

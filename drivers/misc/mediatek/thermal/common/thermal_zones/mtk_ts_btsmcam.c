@@ -1345,11 +1345,6 @@ static int mtkts_btsmcam_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	thermistor_ch4 = devm_kzalloc(&pdev->dev, sizeof(*thermistor_ch4),
-		GFP_KERNEL);
-	if (!thermistor_ch4)
-		return -ENOMEM;
-
 	thermistor_ch4 = iio_channel_get(&pdev->dev, "thermistor-ch3");
 	ret = IS_ERR(thermistor_ch4);
 	if (ret) {
@@ -1414,12 +1409,12 @@ static int __init mtkts_btsmcam_init(void)
 		mtkts_btsmcam_dprintk(
 			"[%s]: mkdir /proc/driver/thermal failed\n", __func__);
 	} else {
-		entry = proc_create("tzbtspa", 0664, mtkts_btsmcam_dir,
+		entry = proc_create("tzbtsmcam", 0664, mtkts_btsmcam_dir,
 				&mtkts_btsmcam_fops);
 		if (entry)
 			proc_set_user(entry, uid, gid);
 
-		entry = proc_create("tzbtspa_param", 0664, mtkts_btsmcam_dir,
+		entry = proc_create("tzbtsmcam_param", 0664, mtkts_btsmcam_dir,
 				&mtkts_btsmcam_param_fops);
 		if (entry)
 			proc_set_user(entry, uid, gid);
