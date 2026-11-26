@@ -823,9 +823,9 @@ static int teei_config_init(void)
 	class_dev = device_create(config_driver_class, NULL,
 			teei_config_device_no, NULL, TEEI_CONFIG_DEV);
 
-	if (class_dev == NULL) {
-		IMSG_ERROR("class_device_create failed %x\n", retVal);
-		retVal = -ENOMEM;
+	if (IS_ERR(class_dev)) {
+		retVal = PTR_ERR(class_dev);
+		IMSG_ERROR("class_device_create failed %d\n", retVal);
 		goto class_destroy;
 	}
 
@@ -843,9 +843,9 @@ static int teei_config_init(void)
 	goto return_fn;
 
 class_device_destroy:
-	device_destroy(driver_class, teei_config_device_no);
+	device_destroy(config_driver_class, teei_config_device_no);
 class_destroy:
-	class_destroy(driver_class);
+	class_destroy(config_driver_class);
 unregister_chrdev_region:
 	unregister_chrdev_region(teei_config_device_no, 1);
 return_fn:
@@ -1044,9 +1044,9 @@ static int teei_client_init(void)
 	class_dev = device_create(driver_class, NULL,
 				teei_client_device_no, NULL, TEEI_CLIENT_DEV);
 
-	if (class_dev == NULL) {
-		IMSG_ERROR("class_device_create failed %x\n", ret_code);
-		ret_code = -ENOMEM;
+	if (IS_ERR(class_dev)) {
+		ret_code = PTR_ERR(class_dev);
+		IMSG_ERROR("class_device_create failed %d\n", ret_code);
 		goto class_destroy;
 	}
 

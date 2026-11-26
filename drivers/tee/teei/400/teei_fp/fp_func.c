@@ -234,8 +234,8 @@ int fp_init(void)
 	}
 
 	class_dev = device_create(driver_class, NULL, devno, NULL, DEV_NAME);
-	if (!class_dev) {
-		result = -ENOMEM;
+	if (IS_ERR(class_dev)) {
+		result = PTR_ERR(class_dev);
 		IMSG_ERROR("class_device_create failed %d.\n", result);
 		goto class_destroy;
 	}
