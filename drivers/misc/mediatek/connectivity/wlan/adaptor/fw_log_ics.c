@@ -404,8 +404,9 @@ int fw_log_ics_init(void)
 	gIcsDev->class_dev = device_create(gIcsDev->driver_class,
 		NULL, gIcsDev->devno, NULL, FW_LOG_ICS_DRIVER_NAME);
 
-	if (!gIcsDev->class_dev) {
-		result = -ENOMEM;
+	if (IS_ERR(gIcsDev->class_dev)) {
+		result = PTR_ERR(gIcsDev->class_dev);
+		gIcsDev->class_dev = NULL;
 		ICS_ERR("class_device_create failed %d.\n", result);
 		goto class_destroy;
 	}

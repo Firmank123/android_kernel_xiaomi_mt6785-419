@@ -204,11 +204,13 @@ static int sec_init(struct platform_device *dev)
 	}
 
 	sec_class = class_create(THIS_MODULE, SEC_DEV_NAME);
-	if (sec_class == NULL) {
-		pr_notice("[%s] Create class failed(0x%x)\n",
+	if (IS_ERR(sec_class)) {
+		ret = PTR_ERR(sec_class);
+		sec_class = NULL;
+		pr_notice("[%s] Create class failed(%d)\n",
 			  SEC_DEV_NAME,
 			  ret);
-		ret = -1;
+		unregister_chrdev_region(id, 1);
 		return ret;
 	}
 
@@ -220,12 +222,17 @@ static int sec_init(struct platform_device *dev)
 		goto exit;
 
 	sec_device = device_create(sec_class, NULL, id, NULL, SEC_DEV_NAME);
-	if (sec_class == NULL) {
-		pr_notice("[%s] Create device failed(0x%x)\n",
+	if (IS_ERR(sec_device)) {
+		ret = PTR_ERR(sec_device);
+		sec_device = NULL;
+		pr_notice("[%s] Create device failed(%d)\n",
 			  SEC_DEV_NAME,
 			  ret);
+		cdev_del(&sec_dev);
 		class_destroy(sec_class);
-		ret = -1;
+		sec_class = NULL;
+		unregister_chrdev_region(id, 1);
+		memset(&sec, 0, sizeof(sec));
 		return ret;
 	}
 
@@ -243,8 +250,10 @@ static int sec_init(struct platform_device *dev)
 
 exit:
 	if (ret != 0) {
-		device_destroy(sec_class, id);
-		class_destroy(sec_class);
+		if (!IS_ERR_OR_NULL(sec_device))
+			device_destroy(sec_class, id);
+		if (!IS_ERR_OR_NULL(sec_class))
+			class_destroy(sec_class);
 		unregister_chrdev_region(id, 1);
 		memset(&sec, 0, sizeof(sec));
 	}

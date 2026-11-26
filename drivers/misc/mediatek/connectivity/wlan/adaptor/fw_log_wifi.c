@@ -387,8 +387,9 @@ int fw_log_wifi_init(void)
 	fw_log_wifi_dev->class_dev = device_create(fw_log_wifi_dev->driver_class,
 		NULL, fw_log_wifi_dev->devno, NULL, FW_LOG_WIFI_DRIVER_NAME);
 
-	if (!fw_log_wifi_dev->class_dev) {
-		result = -ENOMEM;
+	if (IS_ERR(fw_log_wifi_dev->class_dev)) {
+		result = PTR_ERR(fw_log_wifi_dev->class_dev);
+		fw_log_wifi_dev->class_dev = NULL;
 		WIFI_ERR_FUNC("class_device_create failed %d.\n", result);
 		goto class_destroy;
 	}

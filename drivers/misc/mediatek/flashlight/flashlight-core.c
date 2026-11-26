@@ -1723,8 +1723,10 @@ static int flashlight_probe(struct platform_device *dev)
 	flashlight_device =
 	    device_create(flashlight_class, NULL, flashlight_devno,
 				NULL, FLASHLIGHT_DEVNAME);
-	if (!flashlight_device) {
-		pr_info("Failed to create device\n");
+	if (IS_ERR(flashlight_device)) {
+		pr_info("Failed to create device (%ld)\n",
+			PTR_ERR(flashlight_device));
+		flashlight_device = NULL;
 		goto err_create_device;
 	}
 

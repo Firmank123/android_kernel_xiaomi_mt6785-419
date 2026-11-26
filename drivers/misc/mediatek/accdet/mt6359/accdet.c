@@ -3376,9 +3376,10 @@ int mt_accdet_probe(struct platform_device *dev)
 	 *device node, when device_create is called
 	 */
 	accdet_class = class_create(THIS_MODULE, ACCDET_DEVNAME);
-	if (!accdet_class) {
-		ret = -1;
-		pr_notice("%s class_create fail.\n", __func__);
+	if (IS_ERR(accdet_class)) {
+		ret = PTR_ERR(accdet_class);
+		accdet_class = NULL;
+		pr_notice("%s class_create fail.ret:%d\n", __func__, ret);
 		goto err_class_create;
 	}
 
@@ -3387,9 +3388,10 @@ int mt_accdet_probe(struct platform_device *dev)
 	 */
 	accdet_device = device_create(accdet_class, NULL, accdet_devno,
 		NULL, ACCDET_DEVNAME);
-	if (!accdet_device) {
-		ret = -1;
-		pr_notice("%s device_create fail.\n", __func__);
+	if (IS_ERR(accdet_device)) {
+		ret = PTR_ERR(accdet_device);
+		accdet_device = NULL;
+		pr_notice("%s device_create fail.ret:%d\n", __func__, ret);
 		goto err_device_create;
 	}
 

@@ -714,8 +714,10 @@ static int __init elliptic_driver_init(void)
     elliptic_major = MAJOR(device_number);
     elliptic_class = class_create(THIS_MODULE, "chardev");
 
-    if (elliptic_class == NULL) {
-        pr_err("[ELUS] Class creation failed");
+    if (IS_ERR(elliptic_class)) {
+        err = PTR_ERR(elliptic_class);
+        elliptic_class = NULL;
+        pr_err("[ELUS] Class creation failed: %d", err);
         goto fail;
     }
 

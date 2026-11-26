@@ -2391,16 +2391,34 @@ static int imgsensor_probe(struct platform_device *pplatform_device)
 	if (IS_ERR(pimgsensor->pclass)) {
 		int ret = PTR_ERR(pimgsensor->pclass);
 
+		pimgsensor->pclass = NULL;
 		PK_DBG("Unable to create class, err = %d\n", ret);
+		cdev_del(pimgsensor->pcdev);
+		unregister_chrdev_region(pimgsensor->dev_no, 1);
 		return ret;
 	}
 
 	pdevice = device_create(pimgsensor->pclass, NULL,
 			pimgsensor->dev_no, NULL, IMGSENSOR_DEV_NAME);
+	if (IS_ERR(pdevice)) {
+		int ret = PTR_ERR(pdevice);
+
+		PK_PR_ERR("Unable to create device, err = %d\n", ret);
+		class_destroy(pimgsensor->pclass);
+		pimgsensor->pclass = NULL;
+		cdev_del(pimgsensor->pcdev);
+		unregister_chrdev_region(pimgsensor->dev_no, 1);
+		return ret;
+	}
 	pdevice->of_node =
 		of_find_compatible_node(NULL, NULL, "mediatek,imgsensor");
 	if (!pdevice->of_node) {
 		PK_PR_ERR("Get cust camera node failed!\n");
+		device_destroy(pimgsensor->pclass, pimgsensor->dev_no);
+		class_destroy(pimgsensor->pclass);
+		pimgsensor->pclass = NULL;
+		cdev_del(pimgsensor->pcdev);
+		unregister_chrdev_region(pimgsensor->dev_no, 1);
 		return -ENODEV;
 	}
 
