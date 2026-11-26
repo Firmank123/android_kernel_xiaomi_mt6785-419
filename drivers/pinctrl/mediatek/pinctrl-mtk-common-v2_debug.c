@@ -39,8 +39,10 @@ static void mtk_gpio_find_mtk_pinctrl_dev(void)
 			return;
 		}
 
-		pin = (pin + 1) - gdesc->gdev->chip->base;
-	} while (pin > 0);
+		if (gdesc->gdev->chip->base <= 0)
+			break;
+		pin = gdesc->gdev->chip->base - 1;
+	} while (1);
 }
 
 int gpio_get_tristate_input(unsigned int pin)
@@ -415,8 +417,10 @@ static int mtk_gpio_create_attr(void)
 			}
 		}
 
-		pin = (pin + 1) - gdesc->gdev->chip->base;
-	} while (pin > 0);
+		if (gdesc->gdev->chip->base <= 0)
+			break;
+		pin = gdesc->gdev->chip->base - 1;
+	} while (1);
 
 	return err;
 }
