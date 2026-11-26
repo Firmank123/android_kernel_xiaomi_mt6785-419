@@ -206,6 +206,7 @@ int devkmsg_sysctl_set_loglvl(struct ctl_table *table, int write,
  * consecutive continuation flags, the end result should be the same too.
  */
 static int nr_ext_console_drivers;
+static int nr_pstore_console_drivers;
 
 /*
  * Helper macros to handle lockdep when locking/unlocking console_sem. We use
@@ -1196,6 +1197,11 @@ static bool suppress_message_printing(int level)
 	return (level >= console_loglevel && !ignore_loglevel);
 }
 
+static bool suppress_pstore_printing(int level)
+{
+	return (level >= LOGLEVEL_DEBUG && !ignore_loglevel);
+}
+
 #ifdef CONFIG_BOOT_PRINTK_DELAY
 
 static int boot_delay; /* msecs delay after each printk during bootup */
@@ -1749,7 +1755,8 @@ static int console_trylock_spinning(void)
  * log_buf[start] to log_buf[end - 1].
  * The console_lock must be held.
  */
-static void call_console_drivers(const char *ext_text, size_t ext_len,
+static void call_console_drivers(int level, bool suppress,
+				 const char *ext_text, size_t ext_len,
 				 const char *text, size_t len)
 {
 	struct console *con;
@@ -1769,6 +1776,12 @@ static void call_console_drivers(const char *ext_text, size_t ext_len,
 		if (!cpu_online(smp_processor_id()) &&
 		    !(con->flags & CON_ANYTIME))
 			continue;
+		if (con->flags & CON_PSTORE) {
+			if (suppress_pstore_printing(level))
+				continue;
+		} else if (suppress) {
+			continue;
+		}
 		if (con->flags & CON_EXTENDED)
 			con->write(con, ext_text, ext_len);
 		else
@@ -2080,11 +2093,13 @@ static ssize_t msg_print_ext_body(char *buf, size_t size,
 				  char *text, size_t text_len) { return 0; }
 static void console_lock_spinning_enable(void) { }
 static int console_lock_spinning_disable_and_check(void) { return 0; }
-static void call_console_drivers(const char *ext_text, size_t ext_len,
+static void call_console_drivers(int level, bool suppress,
+				 const char *ext_text, size_t ext_len,
 				 const char *text, size_t len) {}
 static size_t msg_print_text(const struct printk_log *msg,
 			     bool syslog, char *buf, size_t size) { return 0; }
 static bool suppress_message_printing(int level) { return false; }
+static bool suppress_pstore_printing(int level) { return false; }
 
 #endif /* CONFIG_PRINTK */
 
@@ -2413,6 +2428,8 @@ again:
 		struct printk_log *msg;
 		size_t ext_len = 0;
 		size_t len;
+		bool suppress;
+		int level;
 
 		printk_safe_enter_irqsave(flags);
 		raw_spin_lock(&logbuf_lock);
@@ -2432,7 +2449,11 @@ skip:
 			break;
 
 		msg = log_from_idx(console_idx);
-		if (suppress_message_printing(msg->level)) {
+		suppress = suppress_message_printing(msg->level);
+		if (suppress &&
+		    (!nr_pstore_console_drivers ||
+		     (exclusive_console && !(exclusive_console->flags & CON_PSTORE)) ||
+		     suppress_pstore_printing(msg->level))) {
 			/*
 			 * Skip record we have buffered and already printed
 			 * directly to the console when we received it, and
@@ -2442,6 +2463,7 @@ skip:
 			console_seq++;
 			goto skip;
 		}
+		level = msg->level;
 
 		/* Output to all consoles once old messages replayed. */
 		if (unlikely(exclusive_console &&
@@ -2475,7 +2497,8 @@ skip:
 		console_lock_spinning_enable();
 
 		stop_critical_timings();	/* don't trace print latency */
-		call_console_drivers(ext_text, ext_len, text, len);
+		call_console_drivers(level, suppress, ext_text, ext_len,
+				     text, len);
 		start_critical_timings();
 
 		if (console_lock_spinning_disable_and_check()) {
@@ -2760,6 +2783,9 @@ void register_console(struct console *newcon)
 		if (!nr_ext_console_drivers++)
 			pr_info("printk: continuation disabled due to ext consoles, expect more fragments in /dev/kmsg\n");
 
+	if (newcon->flags & CON_PSTORE)
+		nr_pstore_console_drivers++;
+
 	if (newcon->flags & CON_PRINTBUFFER) {
 		/*
 		 * console_unlock(); will print out the buffered messages
@@ -2838,6 +2864,9 @@ int unregister_console(struct console *console)
 
 	if (!res && (console->flags & CON_EXTENDED))
 		nr_ext_console_drivers--;
+
+	if (!res && (console->flags & CON_PSTORE))
+		nr_pstore_console_drivers--;
 
 	/*
 	 * If this isn't the last console and it has CON_CONSDEV set, we
