@@ -8458,13 +8458,18 @@ static int __ufshcd_setup_clocks(struct ufs_hba *hba, bool on,
 
 	ret = ufshcd_vops_setup_clocks(hba, on, POST_CHANGE);
 	if (ret)
-		return ret;
+		goto out;
 
 out:
 	if (ret) {
 		list_for_each_entry(clki, head, list) {
-			if (!IS_ERR_OR_NULL(clki->clk) && clki->enabled)
+			if (skip_ref_clk && !strcmp(clki->name, "ref_clk"))
+				continue;
+
+			if (!IS_ERR_OR_NULL(clki->clk) && clki->enabled) {
 				clk_disable_unprepare(clki->clk);
+				clki->enabled = false;
+			}
 		}
 	} else if (!ret && on) {
 		spin_lock_irqsave(hba->host->host_lock, flags);
