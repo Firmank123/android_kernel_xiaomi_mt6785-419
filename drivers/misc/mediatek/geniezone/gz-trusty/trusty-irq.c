@@ -380,6 +380,8 @@ static int trusty_irq_init_normal_irq(struct trusty_irq_state *is, int tirq)
 
 	if (spi_node) {
 		struct of_phandle_args oirq;
+		struct irq_domain *domain;
+		irq_hw_number_t hwirq;
 
 		if (irq < 32) {
 			ret = -EINVAL;
@@ -387,16 +389,27 @@ static int trusty_irq_init_normal_irq(struct trusty_irq_state *is, int tirq)
 			goto err_request_irq;
 		}
 
-		oirq.np = spi_node;
-		oirq.args_count = 3;
-		oirq.args[0] = GIC_SPI;
-		oirq.args[1] = irq - 32;
-		oirq.args[2] = 0;
+		domain = irq_find_host(spi_node);
+		hwirq = (spi_node == ppi_node) ? tirq : (tirq - 32);
+		irq = domain ? irq_find_mapping(domain, hwirq) : 0;
+		if (!irq) {
+			struct irq_data *irq_data;
 
-		irq = irq_create_of_mapping(&oirq);
-		if (irq == 0) {
-			ret = -EINVAL;
-			goto err_request_irq;
+			oirq.np = spi_node;
+			oirq.args_count = 3;
+			oirq.args[0] = GIC_SPI;
+			oirq.args[1] = tirq - 32;
+			oirq.args[2] = IRQ_TYPE_LEVEL_HIGH;
+
+			irq = irq_create_of_mapping(&oirq);
+			if (irq == 0) {
+				ret = -EINVAL;
+				goto err_request_irq;
+			}
+
+			irq_data = irq_get_irq_data(irq);
+			if (irq_data)
+				irqd_set_trigger_type(irq_data, IRQ_TYPE_NONE);
 		}
 	}
 
@@ -473,7 +486,6 @@ static int trusty_irq_init_per_cpu_irq(struct trusty_irq_state *is, int tirq)
 	}
 
 	if (ppi_node) {
-		struct of_phandle_args oirq;
 		struct irq_domain *domain;
 
 		if (irq >= 32) {
@@ -482,19 +494,27 @@ static int trusty_irq_init_per_cpu_irq(struct trusty_irq_state *is, int tirq)
 			goto err_request_percpu_irq;
 		}
 
-		oirq.np = ppi_node;
-		oirq.args_count = 3;
-		oirq.args[0] = GIC_PPI;
-		oirq.args[1] = irq - 16;
-		oirq.args[2] = 0;
-
 		domain = irq_find_host(ppi_node);
 		irq = domain ? irq_find_mapping(domain, tirq) : 0;
-		if (!irq)
+		if (!irq) {
+			struct of_phandle_args oirq;
+			struct irq_data *irq_data;
+
+			oirq.np = ppi_node;
+			oirq.args_count = 3;
+			oirq.args[0] = GIC_PPI;
+			oirq.args[1] = tirq - 16;
+			oirq.args[2] = IRQ_TYPE_LEVEL_HIGH;
+
 			irq = irq_create_of_mapping(&oirq);
-		if (irq == 0) {
-			ret = -EINVAL;
-			goto err_request_percpu_irq;
+			if (irq == 0) {
+				ret = -EINVAL;
+				goto err_request_percpu_irq;
+			}
+
+			irq_data = irq_get_irq_data(irq);
+			if (irq_data)
+				irqd_set_trigger_type(irq_data, IRQ_TYPE_NONE);
 		}
 
 		for_each_possible_cpu(cpu)
