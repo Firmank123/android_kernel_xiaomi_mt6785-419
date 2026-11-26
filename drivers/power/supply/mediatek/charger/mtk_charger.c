@@ -2558,6 +2558,8 @@ static bool mtk_is_charger_on(struct charger_manager *info)
 	if (chr_type == CHARGER_UNKNOWN) {
 		if (info->chr_type != CHARGER_UNKNOWN) {
 			mtk_charger_plug_out(info);
+			charger_manager_notifier(info,
+						CHARGER_NOTIFY_STOP_CHARGING);
 			mutex_lock(&info->cable_out_lock);
 			info->cable_out_cnt = 0;
 			mutex_unlock(&info->cable_out_lock);
@@ -4851,6 +4853,8 @@ void notify_adapter_event(enum adapter_type type, enum adapter_event evt,
 			pval.intval = POWER_SUPPLY_PD_INACTIVE;
 			power_supply_set_property(pinfo->usb_psy,
 					POWER_SUPPLY_PROP_PD_ACTIVE, &pval);
+			mtk_charger_int_handler();
+			power_supply_changed(pinfo->usb_psy);
 			/* reset PE40 */
 			break;
 
