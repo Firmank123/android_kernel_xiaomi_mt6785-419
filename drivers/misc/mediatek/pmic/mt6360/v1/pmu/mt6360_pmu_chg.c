@@ -675,8 +675,9 @@ static int mt6360_chgdet_pre_process(struct mt6360_pmu_chg_info *mpci)
 static int mt6360_get_vbus(struct charger_device *chg_dev, u32 *vbus);
 static void mt6360_get_hvdcp_work(struct work_struct *work)
 {
-	int ret, i;
+	int ret, i, last_err = 0;
 	u32 vbus_uv = 0, vbus = 0;
+	bool have_vbus = false;
 	struct mt6360_pmu_chg_info *mpci = container_of(work,
 			struct mt6360_pmu_chg_info, get_hvdcp_work.work);
 
@@ -688,6 +689,9 @@ static void mt6360_get_hvdcp_work(struct work_struct *work)
 	}
 	ret = mt6360_pmu_reg_write(mpci->mpi,
 				MT6360_PMU_DPDM_CTRL, DP_33_DM_06);
+	if (ret < 0)
+		dev_err(mpci->dev, "%s: set dpdm 3.3/0.6 fail(%d)\n",
+			__func__, ret);
 	mutex_unlock(&mpci->chgdet_lock);
 
 	msleep(300);
@@ -700,13 +704,18 @@ static void mt6360_get_hvdcp_work(struct work_struct *work)
 		}
 		mutex_unlock(&mpci->chgdet_lock);
 		ret = mt6360_get_vbus(mpci->chg_dev, &vbus_uv);
-		if (ret < 0)
-			dev_err(mpci->dev, "%s: get vbus adc fail\n", __func__);
-		else
+		if (ret < 0) {
+			last_err = ret;
+			dev_err(mpci->dev, "%s: get vbus adc fail(%d)\n",
+				__func__, ret);
+		} else {
 			vbus = vbus_uv / 1000;
-		dev_info(mpci->dev, "%s: get vbus=%d.\n", __func__, vbus);
-		if (ret >= 0 && vbus > HVDCP_VBUS_HIGH_LIMIT)
-			break;
+			have_vbus = true;
+			dev_info(mpci->dev, "%s: get vbus=%d.\n",
+				 __func__, vbus);
+			if (vbus > HVDCP_VBUS_HIGH_LIMIT)
+				break;
+		}
 		msleep(30);
 	}
 
@@ -716,12 +725,25 @@ static void mt6360_get_hvdcp_work(struct work_struct *work)
 		dev_info(mpci->dev, "%s: mpci->attach=0, stop hvdcp_work.\n", __func__);
 		return;
 	}
-	if (vbus > HVDCP_VBUS_HIGH_LIMIT) {
+	if (!have_vbus) {
+		dev_err(mpci->dev,
+			"%s: all vbus adc reads failed(%d), keep DCP\n",
+			__func__, last_err);
+		ret = mt6360_pmu_reg_write(mpci->mpi,
+				MT6360_PMU_DPDM_CTRL, DP_06_DM_06);
+		if (ret < 0)
+			dev_err(mpci->dev, "%s: restore dpdm fail(%d)\n",
+				__func__, ret);
+		mpci->chg_type = STANDARD_CHARGER;
+	} else if (vbus > HVDCP_VBUS_HIGH_LIMIT) {
 		mpci->chg_type = HVDCP_CHARGER;
 		dev_info(mpci->dev, "%s: Get QC2 succ.\n", __func__);
 	} else if (vbus > HVDCP_VBUS_LOW_LIMIT) {
 		ret = mt6360_pmu_reg_write(mpci->mpi,
 				MT6360_PMU_DPDM_CTRL, DP_06_DM_06);
+		if (ret < 0)
+			dev_err(mpci->dev, "%s: set dpdm 0.6/0.6 fail(%d)\n",
+				__func__, ret);
 		mpci->chg_type = STANDARD_CHARGER;
 		dev_info(mpci->dev, "%s: No QC2, Get DCP.\n", __func__);
 	} else {
