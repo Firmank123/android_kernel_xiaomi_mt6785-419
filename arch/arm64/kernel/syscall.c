@@ -18,6 +18,18 @@ long compat_arm_syscall(struct pt_regs *regs, int scno);
 long sys_ni_syscall(void);
 
 #if defined(CONFIG_KSU) && defined(CONFIG_KSU_SYSCALL_TABLE_HOOK)
+#include <linux/cred.h>
+#include <linux/fcntl.h>
+#include <linux/printk.h>
+#include <linux/sched.h>
+#include <linux/string.h>
+#include <linux/uaccess.h>
+#include <asm/memory.h>
+
+extern bool is_init(const struct cred *cred);
+extern void escape_to_root_for_init(void);
+extern long ksu_adb_root_handle_execve(struct pt_regs *regs);
+extern long ksu_adb_root_handle_execveat(struct pt_regs *regs);
 extern long ksu_handle_execve_sucompat(const char __user **filename,
 				       int nr, const struct pt_regs *regs);
 extern long ksu_handle_execveat_sucompat_user(const char __user **filename,
@@ -25,6 +37,35 @@ extern long ksu_handle_execveat_sucompat_user(const char __user **filename,
 extern int ksu_handle_faccessat(int *dfd, const char __user **filename,
 				int *mode, int *flags);
 extern int ksu_handle_stat(int *dfd, const char __user **filename, int *flags);
+
+asmlinkage long __arm64_sys_execve(const struct pt_regs *regs);
+asmlinkage long __arm64_sys_execveat(const struct pt_regs *regs);
+asmlinkage long __arm64_sys_faccessat(const struct pt_regs *regs);
+asmlinkage long __arm64_sys_newfstatat(const struct pt_regs *regs);
+
+#define KSU_KSUD_PATH "/data/adb/ksud"
+
+static void ksu_syscall_init_exec_tracker(const char __user *filename_user)
+{
+	char path[64];
+	const char __user *fn;
+	long ret;
+
+	if (unlikely(!filename_user))
+		return;
+
+	fn = (const char __user *)untagged_addr((unsigned long)filename_user);
+	memset(path, 0, sizeof(path));
+	ret = strncpy_from_user(path, fn, sizeof(path) - 1);
+	if (ret < 0)
+		return;
+
+	if (unlikely(strcmp(path, KSU_KSUD_PATH) == 0)) {
+		pr_info("ksu: syscall entry escape to root for init executing ksud: %d\n",
+			current->pid);
+		escape_to_root_for_init();
+	}
+}
 #endif
 
 static long do_ni_syscall(struct pt_regs *regs, int scno)
@@ -128,22 +169,59 @@ static void el0_svc_common(struct pt_regs *regs, int scno, int sc_nr,
 	if (!is_compat_task()) {
 		switch (scno) {
 		case __NR_execve:
-			ksu_handle_execve_sucompat(
-				(const char __user **)&regs->regs[0], scno, regs);
+			if (READ_ONCE(syscall_table[__NR_execve]) ==
+			    __arm64_sys_execve) {
+				if (current->pid != 1 && is_init(current_cred())) {
+					ksu_syscall_init_exec_tracker(
+						(const char __user *)regs->regs[0]);
+					ksu_adb_root_handle_execve(regs);
+				} else {
+					ksu_handle_execve_sucompat(
+						(const char __user **)&regs->regs[0],
+						scno, regs);
+				}
+			}
 			break;
 		case __NR_execveat:
-			ksu_handle_execveat_sucompat_user(
-				(const char __user **)&regs->regs[1], scno, regs);
+			/*
+			 * ksu_sth_execveat checks (int)regs->regs[3] == 0
+			 * (envp) instead of flags (regs->regs[4]), so handle
+			 * both unpatched table entries and non-zero envp calls
+			 * here without duplicating zero-envp patched calls.
+			 */
+			if (READ_ONCE(syscall_table[__NR_execveat]) ==
+			    __arm64_sys_execveat ||
+			    (int)regs->regs[3] != 0) {
+				if ((int)regs->regs[0] == AT_FDCWD &&
+				    (int)regs->regs[4] == 0) {
+					if (current->pid != 1 &&
+					    is_init(current_cred())) {
+						ksu_syscall_init_exec_tracker(
+							(const char __user *)regs->regs[1]);
+						ksu_adb_root_handle_execveat(regs);
+					} else {
+						ksu_handle_execveat_sucompat_user(
+							(const char __user **)&regs->regs[1],
+							scno, regs);
+					}
+				}
+			}
 			break;
 		case __NR_faccessat:
-			ksu_handle_faccessat((int *)&regs->regs[0],
-				(const char __user **)&regs->regs[1],
-				(int *)&regs->regs[2], NULL);
+			if (READ_ONCE(syscall_table[__NR_faccessat]) ==
+			    __arm64_sys_faccessat) {
+				ksu_handle_faccessat((int *)&regs->regs[0],
+					(const char __user **)&regs->regs[1],
+					(int *)&regs->regs[2], NULL);
+			}
 			break;
 		case __NR_newfstatat:
-			ksu_handle_stat((int *)&regs->regs[0],
-				(const char __user **)&regs->regs[1],
-				(int *)&regs->regs[3]);
+			if (READ_ONCE(syscall_table[__NR_newfstatat]) ==
+			    __arm64_sys_newfstatat) {
+				ksu_handle_stat((int *)&regs->regs[0],
+					(const char __user **)&regs->regs[1],
+					(int *)&regs->regs[3]);
+			}
 			break;
 		}
 	}
