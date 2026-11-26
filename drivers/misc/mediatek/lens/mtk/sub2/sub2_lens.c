@@ -486,6 +486,8 @@ static const struct file_operations g_stAF_fops = {
 
 static inline int Register_AF_CharDrv(void)
 {
+	int ret;
+
 	LOG_INF("Start\n");
 
 	/* Allocate char driver no. */
@@ -512,28 +514,44 @@ static inline int Register_AF_CharDrv(void)
 	/* Add to system */
 	if (cdev_add(g_pAF_CharDrv, g_AF_devno, 1)) {
 		LOG_INF("Attatch file operation failed\n");
-
-		unregister_chrdev_region(g_AF_devno, 1);
-
-		return -EAGAIN;
+		ret = -EAGAIN;
+		goto err_cdev_add;
 	}
 
 	actuator_class = class_create(THIS_MODULE, AF_DRIVER_CLASS_NAME);
 	if (IS_ERR(actuator_class)) {
-		int ret = PTR_ERR(actuator_class);
-
+		ret = PTR_ERR(actuator_class);
+		actuator_class = NULL;
 		LOG_INF("Unable to create class, err = %d\n", ret);
-		return ret;
+		goto err_class_create;
 	}
 
 	lens_device = device_create(actuator_class, NULL, g_AF_devno, NULL,
 				    AF_DRVNAME);
 
-	if (lens_device == NULL)
-		return -EIO;
+	if (IS_ERR(lens_device)) {
+		ret = PTR_ERR(lens_device);
+		lens_device = NULL;
+		LOG_INF("Unable to create device, err = %d\n", ret);
+		goto err_device_create;
+	}
 
 	LOG_INF("End\n");
 	return 0;
+
+err_device_create:
+	class_destroy(actuator_class);
+	actuator_class = NULL;
+err_class_create:
+	cdev_del(g_pAF_CharDrv);
+	g_pAF_CharDrv = NULL;
+	unregister_chrdev_region(g_AF_devno, 1);
+	return ret;
+err_cdev_add:
+	kobject_put(&g_pAF_CharDrv->kobj);
+	g_pAF_CharDrv = NULL;
+	unregister_chrdev_region(g_AF_devno, 1);
+	return ret;
 }
 
 static inline void Unregister_AF_CharDrv(void)
