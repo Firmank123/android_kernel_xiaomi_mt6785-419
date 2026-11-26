@@ -15,6 +15,7 @@
 #include <linux/fs.h>
 #include <linux/i2c.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/uaccess.h>
 #ifdef CONFIG_COMPAT
@@ -838,6 +839,24 @@ static struct platform_driver g_stAF_Driver = {
 
 static struct platform_device g_stAF_device = {
 	.name = PLATFORM_DRIVER_NAME, .id = 0, .dev = {} };
+static bool g_af_pdev_registered;
+
+static bool mainaf_has_dt_device(void)
+{
+#ifdef CONFIG_OF
+	struct device_node *np;
+	bool avail;
+
+	np = of_find_compatible_node(NULL, NULL, "mediatek,camera_af_lens");
+	if (!np)
+		return false;
+	avail = of_device_is_available(np);
+	of_node_put(np);
+	return avail;
+#else
+	return false;
+#endif
+}
 
 static int __init MAINAF_i2C_init(void)
 {
@@ -845,13 +864,20 @@ static int __init MAINAF_i2C_init(void)
 	i2c_register_board_info(LENS_I2C_BUSNUM, &kd_lens_dev, 1);
 #endif
 
-	if (platform_device_register(&g_stAF_device)) {
-		LOG_INF("failed to register AF driver\n");
-		return -ENODEV;
+	if (!mainaf_has_dt_device()) {
+		if (platform_device_register(&g_stAF_device)) {
+			LOG_INF("failed to register AF device\n");
+			return -ENODEV;
+		}
+		g_af_pdev_registered = true;
 	}
 
 	if (platform_driver_register(&g_stAF_Driver)) {
 		LOG_INF("Failed to register AF driver\n");
+		if (g_af_pdev_registered) {
+			platform_device_unregister(&g_stAF_device);
+			g_af_pdev_registered = false;
+		}
 		return -ENODEV;
 	}
 
@@ -861,7 +887,10 @@ static int __init MAINAF_i2C_init(void)
 static void __exit MAINAF_i2C_exit(void)
 {
 	platform_driver_unregister(&g_stAF_Driver);
-	platform_device_unregister(&g_stAF_device);
+	if (g_af_pdev_registered) {
+		platform_device_unregister(&g_stAF_device);
+		g_af_pdev_registered = false;
+	}
 }
 module_init(MAINAF_i2C_init);
 module_exit(MAINAF_i2C_exit);
