@@ -716,7 +716,7 @@ int mtkts_btspdchg_get_hw_temp(void)
 	mutex_unlock(&BTSPDCHG_lock);
 
 	if (t_ret > 40000)	/* abnormal high temp */
-		mtkts_btspdchg_printk("T_btspdchg=%d\n", t_ret);
+		mtkts_btspdchg_dprintk("T_btspdchg=%d\n", t_ret);
 
 	mtkts_btspdchg_dprintk("[%s] T_btspdchg, %d\n", __func__,
 									t_ret);

@@ -1129,7 +1129,7 @@ static int __init mtkthermal_init(void)
 	if (proc_tz_dir_entry == NULL)
 		THRML_ERROR_LOG("%s mkdir /proc/mtktz failed\n", __func__);
 
-	INIT_DELAYED_WORK(&_mtm_sysinfo_poll_queue, _mtm_update_sysinfo);
+	INIT_DEFERRABLE_WORK(&_mtm_sysinfo_poll_queue, _mtm_update_sysinfo);
 	_mtm_update_sysinfo(NULL);
 
 	return err;
